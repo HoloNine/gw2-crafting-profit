@@ -1,1 +1,9 @@
-{}
+{
+  "_comment": "Items you can only craft once per day. Key = item ID, value = name (for humans).",
+  "46742": "Lump of Mithrillium",
+  "46736": "Spiritwood Plank",
+  "46740": "Spool of Silk Weaving Thread",
+  "46739": "Elonian Leather Square",
+  "46744": "Glob of Elder Spirit Residue",
+  "46745": "Spool of Thick Elonian Cord"
+}

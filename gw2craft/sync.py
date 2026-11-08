@@ -115,9 +115,25 @@ async def sync_recipes(api: GW2Api, db: sqlite3.Connection, full: bool = False) 
     return len(rows)
 
 
-def needed_item_ids(db: sqlite3.Connection) -> set[int]:
-    """Every item that is a recipe output or an Item ingredient."""
+MYSTIC_FORGE_PATH = DB_PATH.parent / "mystic_forge.json"
+
+
+def mystic_forge_item_ids(path: Path = MYSTIC_FORGE_PATH) -> set[int]:
+    """Outputs and ingredients of the hand-kept Mystic Forge recipes."""
+    if not path.exists():
+        return set()
     ids: set[int] = set()
+    for out_id, recipe in json.loads(path.read_text() or "{}").items():
+        if out_id.startswith("_"):
+            continue
+        ids.add(int(out_id))
+        ids.update(int(i["id"]) for i in recipe.get("ingredients", []))
+    return ids
+
+
+def needed_item_ids(db: sqlite3.Connection) -> set[int]:
+    """Every item that is a recipe output or an Item ingredient, plus Mystic Forge items."""
+    ids: set[int] = mystic_forge_item_ids()
     for row in db.execute("SELECT output_item_id, ingredients FROM recipes"):
         ids.add(row["output_item_id"])
         for ing in json.loads(row["ingredients"]):
@@ -127,7 +143,10 @@ def needed_item_ids(db: sqlite3.Connection) -> set[int]:
 
 
 async def sync_items(api: GW2Api, db: sqlite3.Connection, full: bool = False) -> int:
-    want = needed_item_ids(db)
+    # Recipe items + every tradable item. Tradable items are needed so we can find
+    # sellable legendaries (Gen 1 legendaries are Mystic Forge only, not in /recipes).
+    tradable = set(await api.get("/commerce/prices"))
+    want = needed_item_ids(db) | tradable
     have = {r[0] for r in db.execute("SELECT id FROM items")}
     todo = want if full else want - have
     items = await api.get_many("/items", todo)
@@ -143,9 +162,10 @@ async def sync_items(api: GW2Api, db: sqlite3.Connection, full: bool = False) ->
 
 
 async def sync_prices(api: GW2Api, db: sqlite3.Connection) -> int:
-    """Fetch TP prices for every tradable item we care about."""
+    """Fetch TP prices for every tradable item we know (about 140 calls)."""
     tradable = set(await api.get("/commerce/prices"))
-    want = needed_item_ids(db) & tradable
+    have = {r[0] for r in db.execute("SELECT id FROM items")}
+    want = have & tradable
     prices = await api.get_many("/commerce/prices", want)
     now = int(time.time())
     db.execute("DELETE FROM prices")

@@ -1,0 +1,4 @@
+{
+  "_comment": "Hand-kept Mystic Forge recipes, from the official GW2 Wiki. Key = output item ID. Add 'random': true for random outputs, plus 'avg_count' only if confirmed.",
+  "_example": { "output_count": 1, "ingredients": [ { "id": 0, "count": 1 } ], "source": "https://wiki.guildwars2.com/wiki/..." }
+}
