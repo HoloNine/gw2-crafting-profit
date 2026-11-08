@@ -1,0 +1,4 @@
+{
+  "_comment": "Recipe sheets bought from NPCs. Key = sheet item ID. Fill from the GW2 Wiki; never guess. currency: Coin (amount in copper), Karma, or another currency name.",
+  "_example": { "currency": "Karma", "amount": 2100, "source": "https://wiki.guildwars2.com/wiki/..." }
+}

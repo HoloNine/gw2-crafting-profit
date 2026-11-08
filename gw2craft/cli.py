@@ -15,6 +15,7 @@ from rich.table import Table
 
 from . import sync as sync_mod
 from .account import Account, fetch_account, flag_status, load_env
+from .hints import is_missing
 from .api import GW2Api
 from .pricing import Mode, parse_money
 from .profit import find_profits
@@ -82,8 +83,8 @@ def find(
     elif os.environ.get("GW2_API_KEY"):
         acct = _load_account(required=False)
     if not mine:
-        how = "your account" if acct else "recipe flags only (no API key)"
-        console.print(f"[dim]--potential: all recipes, Unlock column checked against {how}.[/]")
+        how = "checked against your account" if acct else "from recipe flags only (no API key)"
+        console.print(f"[dim]--potential: all recipes, status {how}.[/]")
 
     allowed = acct.can_craft if mine and acct else None
     status_of = acct.status if acct else flag_status
@@ -107,12 +108,18 @@ def find(
         all_rows += rows
         label = "Patient (buy orders in, listings out)" if m is Mode.PATIENT else "Fast (buy instantly, sell instantly)"
         shown = rows[:top]
+        view = "mine" if mine else ("key" if acct else "nokey")
         print_rows(console, shown, f"{label}: {len(rows)} profitable, showing {len(shown)}",
-                   show_unlock=not mine)
+                   view=view, acct=acct)
         console.print()
 
-    console.print(f"[dim]Prices are {age / 60:.0f} min old. Profit is per craft, after the 15% TP tax. "
-                  "'+N sub' = N more sub-recipes in the craft tree to unlock.[/]")
+    console.print(f"[dim]Prices are {age / 60:.0f} min old. Profit is per craft, after the 15% TP tax.[/]")
+    if not mine and acct:
+        missing = len({r.recipe.id for r in all_rows if is_missing(r)})
+        console.print(f"[yellow]{missing} good recipes you don't have yet.[/] "
+                      "Run [bold]gw2craft hints[/] for details and wiki links.")
+    elif not acct:
+        console.print("[yellow]Add your API key (GW2_API_KEY in .env) to see which recipes you're missing.[/]")
     if export_path:
         export(all_rows, export_path)
         console.print(f"Saved {len(all_rows)} rows to {export_path}")
@@ -166,6 +173,48 @@ def account() -> None:
         console.print(f"  {d:14} {r:>3}  on {c.name}{note}")
     console.print("[dim]A character can have 2 active disciplines at a time. "
                   "Discovered recipes are per character; recipe sheets are account-wide.[/]")
+
+
+@app.command()
+def hints(
+    discipline: str | None = typer.Option(None, help="Only this discipline, e.g. Weaponsmith."),
+    min_profit: str = typer.Option("1c", help="Minimum profit per craft."),
+    min_roi: float = typer.Option(10.0, help="Minimum return on cost, in %."),
+    max_cost: str | None = typer.Option(None, help="Maximum craft cost, e.g. 20g."),
+    max_spread: float = typer.Option(2.0, help="Patient mode troll-listing filter (0 = off)."),
+    top: int = typer.Option(30, help="How many hints to show."),
+) -> None:
+    """Profitable recipes you don't have yet (or can't craft yet), with wiki links."""
+    from .hints import build_hints
+    from .solver import load_market
+    from .unlocks import SheetPricer, load_npc_sheets, load_sheet_map
+
+    if not os.environ.get("GW2_API_KEY"):
+        console.print("[yellow]Add your API key (GW2_API_KEY in .env) to see which recipes you're missing.[/]")
+        raise typer.Exit(1)
+    db = sync_mod.connect()
+    asyncio.run(sync_mod.sync_all(db, log=lambda *_: None))
+    acct = _load_account()
+    disc = discipline.lower() if discipline else None
+    recipe_filter = (lambda r: any(d.lower() == disc for d in r.disciplines)) if disc else None
+    _, items, quotes = load_market(db)
+    names = {i: it.name for i, it in items.items()}
+    pricer = SheetPricer(load_sheet_map(db), quotes, load_npc_sheets(), names, Mode.PATIENT)
+
+    rows = {}
+    for m in (Mode.PATIENT, Mode.FAST):
+        rows[m] = find_profits(build_solver(db, m), min_profit=_money(min_profit) or 1,
+                               min_roi=min_roi / 100, max_cost=_money(max_cost),
+                               recipe_filter=recipe_filter, max_spread=max_spread or None,
+                               status_of=acct.status)
+    found = build_hints(rows[Mode.PATIENT], rows[Mode.FAST], acct, pricer, names)
+    console.print(f"[bold]{len(found)} good recipes you don't have yet (or can't craft yet).[/] "
+                  f"Showing {min(top, len(found))}, most profitable first.\n")
+    for h in found[:top]:
+        for line in h.lines:
+            console.print(line, soft_wrap=True)
+        console.print()
+    console.print("[dim]Levelling a discipline: see https://gw2crafts.net. Prices move; check the TP before buying.[/]")
 
 
 @app.callback()

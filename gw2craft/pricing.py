@@ -89,6 +89,11 @@ def fmt(copper: int | None) -> str:
     return f"{sign}{c}c"
 
 
+def roi_text(roi: float) -> str:
+    """0.18 -> '18%'. Very large values are capped so columns stay narrow."""
+    return ">999%" if roi > 9.99 else f"{roi:.0%}"
+
+
 _MONEY_RE = re.compile(r"^\s*(?:(\d+)\s*g)?\s*(?:(\d+)\s*s)?\s*(?:(\d+)\s*c?)?\s*$", re.IGNORECASE)
 
 

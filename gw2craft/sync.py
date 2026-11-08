@@ -51,6 +51,13 @@ CREATE TABLE IF NOT EXISTS prices (
     fetched_at INTEGER NOT NULL
 );
 
+-- Recipe sheets: which item teaches which recipe (from a scan of all items).
+CREATE TABLE IF NOT EXISTS recipe_sheets (
+    recipe_id INTEGER NOT NULL,
+    sheet_item_id INTEGER NOT NULL,
+    PRIMARY KEY (recipe_id, sheet_item_id)
+);
+
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -161,6 +168,41 @@ async def sync_items(api: GW2Api, db: sqlite3.Connection, full: bool = False) ->
     return len(rows)
 
 
+def sheet_recipe_ids(item: dict) -> list[int]:
+    """Recipe IDs this item teaches, if it is a recipe sheet."""
+    d = item.get("details") or {}
+    if item.get("type") != "Consumable" or d.get("type") != "Unlock" \
+            or d.get("unlock_type") != "CraftingRecipe":
+        return []
+    ids = [d["recipe_id"]] if "recipe_id" in d else []
+    return ids + list(d.get("extra_recipe_ids", []))
+
+
+async def sync_sheets(api: GW2Api, db: sqlite3.Connection) -> int:
+    """Scan every item once to map recipe -> recipe sheet item.
+
+    Items already cached with a type other than Consumable can't be sheets, so they
+    are skipped. Sheet items are added to the items table so they have names.
+    """
+    all_ids = set(await api.get("/items"))
+    skip = {r[0] for r in db.execute("SELECT id FROM items WHERE type IS NOT NULL AND type != 'Consumable'")}
+    items = await api.get_many("/items", all_ids - skip)
+    pairs, sheet_rows = [], []
+    for it in items:
+        rids = sheet_recipe_ids(it)
+        if not rids:
+            continue
+        pairs += [(rid, it["id"]) for rid in rids]
+        sheet_rows.append((it["id"], it["name"], it.get("type"), it.get("rarity"), it.get("level"),
+                           it.get("vendor_value"), json.dumps(it.get("flags", []))))
+    db.execute("DELETE FROM recipe_sheets")
+    db.executemany("INSERT OR IGNORE INTO recipe_sheets VALUES (?, ?)", pairs)
+    db.executemany("INSERT OR REPLACE INTO items VALUES (?,?,?,?,?,?,?)", sheet_rows)
+    set_meta(db, "sheets_synced_at", str(time.time()))
+    db.commit()
+    return len(pairs)
+
+
 async def sync_prices(api: GW2Api, db: sqlite3.Connection) -> int:
     """Fetch TP prices for every tradable item we know (about 140 calls)."""
     tradable = set(await api.get("/commerce/prices"))
@@ -189,6 +231,11 @@ async def sync_all(db: sqlite3.Connection, force_static: bool = False, force_pri
             log(f"Items:   fetched {await sync_items(api, db, full=force_static)} new/updated")
         else:
             log(f"Recipes and items are fresh ({rec_age / 3600:.1f}h old). Skipping.")
+
+        sheet_age = age_seconds(db, "sheets_synced_at")
+        if force_static or sheet_age is None or sheet_age > STATIC_MAX_AGE:
+            log("Sheets:  scanning all items for recipe sheets (weekly, ~1-2 min)...")
+            log(f"Sheets:  found {await sync_sheets(api, db)} recipe -> sheet links")
 
         price_age = age_seconds(db, "prices_synced_at")
         if force_prices or price_age is None or price_age > PRICE_MAX_AGE:
