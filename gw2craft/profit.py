@@ -10,8 +10,9 @@ buyers pay (the "spread"), it is probably not a real price, so we skip it.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from .account import Status
 from .pricing import Mode, Quote, net, sell_price
 from .solver import Node, Recipe, Solver
 
@@ -30,11 +31,21 @@ class ProfitRow:
     profit: int
     roi: float           # 0.12 = 12%
     node: Node
-    extra_flags: tuple[str, ...] = ()
+    unlock: Status | None = None                 # status of the recipe itself
+    locked_sub: list[tuple[Recipe, Status]] = field(default_factory=list)  # sub-recipes not learned
+
+    @property
+    def unlock_text(self) -> str:
+        if self.unlock is None:
+            return ""
+        t = self.unlock.text()
+        if self.locked_sub:
+            t += f" +{len(self.locked_sub)} sub"
+        return t
 
     @property
     def flags(self) -> list[str]:
-        f = list(self.extra_flags)
+        f = []
         if self.node.timegated:
             f.append("timegated")
         if self.node.needs_own:
@@ -54,6 +65,20 @@ def trusted_listing(quote: Quote, max_spread: float) -> bool:
     return quote.sell_price <= quote.buy_price * max_spread
 
 
+def path_recipes(node: Node) -> list[Recipe]:
+    """Every recipe crafted below the top of this tree (each once). These must be learned too."""
+    seen: dict[int, Recipe] = {}
+
+    def walk(n: Node) -> None:
+        for child, _ in n.children:
+            if child.source == "craft" and child.recipe is not None:
+                seen.setdefault(child.recipe.id, child.recipe)
+                walk(child)
+
+    walk(node)
+    return list(seen.values())
+
+
 def find_profits(
     solver: Solver,
     min_profit: int = 1,
@@ -62,8 +87,13 @@ def find_profits(
     include_own: bool = False,
     recipe_filter: Callable[[Recipe], bool] | None = None,
     max_spread: float | None = 2.0,
+    status_of: Callable[[Recipe], Status] | None = None,
 ) -> list[ProfitRow]:
-    """Profitable recipes, best profit first."""
+    """Profitable recipes, best profit first.
+
+    status_of: if given, each row is tagged with its unlock status and any
+    locked sub-recipes in its craft tree (for --potential).
+    """
     rows: list[ProfitRow] = []
     for recipe in solver.recipes:
         if not recipe.only_items:
@@ -96,7 +126,12 @@ def find_profits(
         roi = profit / cost
         if profit < min_profit or roi < min_roi:
             continue
-        rows.append(ProfitRow(recipe, item.id, item.name, solver.mode, cost, price,
-                              income, profit, roi, node))
+        row = ProfitRow(recipe, item.id, item.name, solver.mode, cost, price,
+                        income, profit, roi, node)
+        if status_of:
+            row.unlock = status_of(recipe)
+            row.locked_sub = [(r, s) for r in path_recipes(node)
+                              if not (s := status_of(r)).ready and r.id != recipe.id]
+        rows.append(row)
     rows.sort(key=lambda r: r.profit, reverse=True)
     return rows

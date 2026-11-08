@@ -60,3 +60,16 @@ def test_filters():
     assert INGOT not in run(Mode.PATIENT, min_roi=0.8)   # ingot ROI is 70%
     assert INGOT not in run(Mode.PATIENT, max_cost=19)
     assert INGOT not in run(Mode.PATIENT, min_profit=15)
+
+
+def test_locked_sub_recipes_are_counted():
+    from gw2craft.account import Status
+    # Sword needs 3 ingots; the ingot recipe (id 1) is crafted in the tree (2 ore = 20 < 30).
+    sword = rec(9, 6, [(INGOT, 3)])
+    items = {**ITEMS, 6: Item(6, "Sword")}
+    quotes = {**QUOTES, 6: Quote(150, 200)}
+    s = Solver([*RECIPES, sword], items, quotes, Mode.PATIENT)
+    status = lambda r: Status("learned") if r.id == 9 else Status("discover")  # noqa: E731
+    row = {r.item_id: r for r in find_profits(s, status_of=status)}[6]
+    assert [r.id for r, _ in row.locked_sub] == [1]
+    assert row.unlock_text == "learned +1 sub"

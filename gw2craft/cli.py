@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from enum import Enum
 from pathlib import Path
 
+import httpx
 import typer
 from rich.console import Console
+from rich.table import Table
 
 from . import sync as sync_mod
-from .account import Account, fetch_account, load_env
+from .account import Account, fetch_account, flag_status, load_env
 from .api import GW2Api
-from .pricing import Mode, fmt, parse_money
+from .pricing import Mode, parse_money
 from .profit import find_profits
 from .report import export, print_rows
 from .solver import build_solver
@@ -56,12 +59,12 @@ def _money(value: str | None) -> int | None:
 @app.command()
 def find(
     mode: ModeChoice = typer.Option(ModeChoice.both, help="Price mode."),
+    mine: bool = typer.Option(False, "--mine", help="Only recipes you have learned and can craft at your current levels (needs API key)."),
+    potential: bool = typer.Option(True, "--potential", help="Default: every recipe, tagged with what is still missing (level, sheet, discovery)."),
     min_profit: str = typer.Option("1c", help="Minimum profit per craft, e.g. 50s or 1g20s."),
     min_roi: float = typer.Option(10.0, help="Minimum return on cost, in %."),
     max_cost: str | None = typer.Option(None, help="Maximum craft cost, e.g. 20g."),
     discipline: str | None = typer.Option(None, help="Only this discipline, e.g. Weaponsmith."),
-    mine: bool = typer.Option(False, "--mine", help="Only recipes you can craft at your discipline levels: learned, auto-learned or discoverable (needs API key)."),
-    no_discover: bool = typer.Option(False, "--no-discover", help="With --mine: hide recipes you would still need to discover."),
     own_mats: bool = typer.Option(False, "--own-mats", help="Also show recipes that need your own (unbuyable) materials. Their cost leaves those out."),
     max_spread: float = typer.Option(2.0, help="Patient mode: skip items whose lowest listing is more than this many times the top buy order (0 = off)."),
     top: int = typer.Option(50, help="How many rows to show per mode."),
@@ -72,12 +75,18 @@ def find(
     asyncio.run(sync_mod.sync_all(db, log=lambda *_: None))  # refresh prices if older than 10 min
     age = sync_mod.age_seconds(db, "prices_synced_at") or 0
 
-    allowed = None
+    acct: Account | None = None
     if mine:
         acct = _load_account()
-        allowed = lambda r: acct.can_craft(r, allow_discover=not no_discover)  # noqa: E731
-        console.print(f"[dim]Your levels: {_levels_text(acct.levels)}. "
-                      f"{len(acct.learned):,} learned recipes{'' if no_discover else ' + discoverable ones'}.[/]")
+        console.print(f"[dim]--mine: only recipes you know, at your levels: {_levels_text(acct.levels)}[/]")
+    elif os.environ.get("GW2_API_KEY"):
+        acct = _load_account(required=False)
+    if not mine:
+        how = "your account" if acct else "recipe flags only (no API key)"
+        console.print(f"[dim]--potential: all recipes, Unlock column checked against {how}.[/]")
+
+    allowed = acct.can_craft if mine and acct else None
+    status_of = acct.status if acct else flag_status
 
     disc = discipline.lower() if discipline else None
     recipe_filter = (lambda r: any(d.lower() == disc for d in r.disciplines)) if disc else None
@@ -93,18 +102,17 @@ def find(
             include_own=own_mats,
             recipe_filter=recipe_filter,
             max_spread=max_spread or None,
+            status_of=status_of,
         )
-        if mine:
-            for r in rows:
-                if acct.status(r.recipe) == "discover":
-                    r.extra_flags = ("discover",)
         all_rows += rows
         label = "Patient (buy orders in, listings out)" if m is Mode.PATIENT else "Fast (buy instantly, sell instantly)"
         shown = rows[:top]
-        print_rows(console, shown, f"{label}: {len(rows)} profitable, showing {len(shown)}")
+        print_rows(console, shown, f"{label}: {len(rows)} profitable, showing {len(shown)}",
+                   show_unlock=not mine)
         console.print()
 
-    console.print(f"[dim]Prices are {age / 60:.0f} min old. Profit is per craft, after the 15% TP tax.[/]")
+    console.print(f"[dim]Prices are {age / 60:.0f} min old. Profit is per craft, after the 15% TP tax. "
+                  "'+N sub' = N more sub-recipes in the craft tree to unlock.[/]")
     if export_path:
         export(all_rows, export_path)
         console.print(f"Saved {len(all_rows)} rows to {export_path}")
@@ -114,29 +122,50 @@ def _levels_text(levels: dict[str, int]) -> str:
     return ", ".join(f"{d} {r}" for d, r in sorted(levels.items(), key=lambda x: -x[1])) or "none"
 
 
-def _load_account() -> Account:
+def _load_account(required: bool = True) -> Account | None:
     async def go() -> Account:
         async with GW2Api() as api:
             return await fetch_account(api)
     try:
         return asyncio.run(go())
-    except RuntimeError as e:
+    except (RuntimeError, httpx.HTTPError) as e:
+        if not required:
+            console.print(f"[yellow]Could not read your account ({e}). Using recipe flags only.[/]")
+            return None
         console.print(f"[red]{e}[/]")
         raise typer.Exit(1) from e
 
 
 @app.command()
 def account() -> None:
-    """Check your API key and show your learned recipes and discipline levels."""
+    """Check your API key: characters, discipline levels, learned recipes, expansions."""
     acct = _load_account()
     console.print(f"Account: [bold]{acct.name}[/]")
     console.print(f"Key permissions: {', '.join(sorted(acct.permissions))}")
-    console.print(f"Learned recipes: {len(acct.learned):,}")
-    console.print("Best discipline levels (any character):")
+    console.print(f"Expansions/access: {', '.join(acct.access)}")
+    console.print(f"Recipe sheets learned (account-wide): {len(acct.sheet_recipes):,}")
+
+    t = Table(title="Characters with crafting", title_justify="left", header_style="bold")
+    t.add_column("Character")
+    t.add_column("Level", justify="right")
+    t.add_column("Disciplines (rating)")
+    t.add_column("Known recipes", justify="right")
+    for c in acct.characters:
+        if not c.crafting and not c.recipes:
+            continue
+        disc = ", ".join(f"{d} {r}" + ("" if active else " (inactive)")
+                         for d, (r, active) in sorted(c.crafting.items(), key=lambda x: -x[1][0]))
+        t.add_row(c.name, str(c.level), disc or "-", f"{len(c.recipes):,}")
+    console.print(t)
+
+    console.print("Use this character for each discipline:")
     for d, r in sorted(acct.levels.items(), key=lambda x: -x[1]):
-        active = acct.active_levels.get(d)
-        note = "" if active == r else "  [dim](not active on that character)[/]"
-        console.print(f"  {d:14} {r}{note}")
+        c = acct.best_character(d)
+        active = c.crafting[d][1]
+        note = "" if active else "  [dim](inactive: switching costs a small fee)[/]"
+        console.print(f"  {d:14} {r:>3}  on {c.name}{note}")
+    console.print("[dim]A character can have 2 active disciplines at a time. "
+                  "Discovered recipes are per character; recipe sheets are account-wide.[/]")
 
 
 @app.callback()
