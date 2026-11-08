@@ -51,6 +51,7 @@ class Recipe:
     source: str = "api"      # "api" or "mystic_forge"
     random: bool = False     # Mystic Forge output count is random (e.g. Mystic Clovers)
     url: str | None = None   # wiki page the recipe came from
+    flags: tuple[str, ...] = ()  # e.g. AutoLearned, LearnedFromItem
 
     @property
     def mystic_forge(self) -> bool:
@@ -104,6 +105,7 @@ class Solver:
         mystic_forge: list[Recipe] | None = None,
     ):
         self.items = items
+        self.recipes = list(recipes)  # normal (API) recipes only
         self.quotes = quotes
         self.mode = mode
         self.vendor = vendor_prices or {}
@@ -293,6 +295,7 @@ def load_market(db: sqlite3.Connection) -> tuple[list[Recipe], dict[int, Item], 
             min_rating=r["min_rating"],
             ingredients=tuple(Ingredient(i["id"], i["count"]) for i in ings if i["type"] == "Item"),
             only_items=bool(r["only_items"]),
+            flags=tuple(json.loads(r["flags"])),
         ))
     items = {
         r["id"]: Item(r["id"], r["name"], frozenset(json.loads(r["flags"])))
