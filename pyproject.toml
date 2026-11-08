@@ -13,6 +13,11 @@ dependencies = [
 [project.scripts]
 gw2craft = "gw2craft.cli:app"
 
+[project.optional-dependencies]
+ui = [
+    "streamlit>=1.67.0",
+]
+
 [dependency-groups]
 dev = ["pytest>=8"]
 

@@ -525,6 +525,20 @@ def legendary(
         "  - 'Own mats free' profit is not real gold: most of the value is your own time.")
 
 
+@app.command()
+def ui() -> None:
+    """Open the Streamlit web UI (needs: uv sync --extra ui)."""
+    import subprocess
+    import sys
+    app_path = Path(__file__).resolve().parent.parent / "app.py"
+    try:
+        import streamlit  # noqa: F401
+    except ImportError:
+        console.print("[red]Streamlit is not installed. Run: uv sync --extra ui[/]")
+        raise typer.Exit(1) from None
+    raise typer.Exit(subprocess.call([sys.executable, "-m", "streamlit", "run", str(app_path)]))
+
+
 @app.callback()
 def main() -> None:
     load_env()  # reads GW2_API_KEY from .env if present

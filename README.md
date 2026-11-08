@@ -38,6 +38,18 @@ gw2craft hints                      good recipes you don't have yet (or can't cr
   --top 30
 ```
 
+## Web UI (Streamlit)
+
+```
+uv sync --extra ui
+uv run gw2craft ui          # or: uv run --extra ui streamlit run app.py
+```
+
+Opens in your browser with four tabs: **Find** (filters, both modes, CSV download),
+**Missing recipes** (hints with wiki links), **Item details** (profit, craft tree,
+shopping list, what's locked) and **Legendaries**. It uses the same code as the
+CLI, so the numbers match. Money columns are in gold so they sort properly.
+
 With an API key, `find` shows a Status column (✅ have it / ⚠ missing recipe /
 ⚠ level too low / ⚠ missing sub-recipe), a clickable "wiki" link, and a short
 hint line under each missing recipe. Without a key it shows "How to get it" from
