@@ -536,7 +536,202 @@ def ui() -> None:
     except ImportError:
         console.print("[red]Streamlit is not installed. Run: uv sync --extra ui[/]")
         raise typer.Exit(1) from None
-    raise typer.Exit(subprocess.call([sys.executable, "-m", "streamlit", "run", str(app_path)]))
+    # Run from the project folder so .streamlit/config.toml (dark theme, 127.0.0.1 only) is used.
+    raise typer.Exit(subprocess.call([sys.executable, "-m", "streamlit", "run", str(app_path)],
+                                     cwd=app_path.parent))
+
+
+track_app = typer.Typer(help="Track your account's Trading Post results.", no_args_is_help=True)
+app.add_typer(track_app, name="track")
+
+
+@track_app.command("sync")
+def track_sync(
+    stock: bool = typer.Option(True, help="Also value the items you own (needs inventories permission)."),
+) -> None:
+    """Pull your TP history, open orders, delivery box and wallet, and save a snapshot."""
+    from .tracking import account_value, sync_account
+
+    db = sync_mod.connect()
+
+    async def go():
+        async with GW2Api() as api:
+            return await sync_account(api, db, with_stock=stock)
+    try:
+        res = asyncio.run(go())
+    except RuntimeError as e:
+        console.print(f"[red]{e}[/]")
+        raise typer.Exit(1) from e
+    s = res.snapshot
+    console.print(f"[green]Synced in {res.seconds:.1f}s.[/] New transactions saved: "
+                  f"{res.new_buys} buys, {res.new_sells} sells. Open: {res.open_buys} buy orders, "
+                  f"{res.open_sells} listings.")
+    console.print(f"  Wallet {fmt(s['wallet'])} | delivery {fmt(s['delivery_coins'])} + {s['delivery_items']} items | "
+                  f"listings {fmt(s['listings_value'])} | buy orders {fmt(s['buy_orders'])} | "
+                  f"stock {fmt(s['stock_value']) if s['stock_value'] is not None else 'not counted'}")
+    console.print(f"  [bold]Account value: {fmt(account_value(s))}[/]")
+
+
+@track_app.command("summary")
+def track_summary() -> None:
+    """Quick terminal summary: profit, account value, unsold listings, outbid orders."""
+    from datetime import datetime, UTC
+    from .performance import cash_flow, open_listings, open_orders
+    from .tracking import account_value, ensure_schema, snapshots
+
+    db = sync_mod.connect()
+    ensure_schema(db)
+    snaps = snapshots(db)
+    if not snaps:
+        console.print("[yellow]No data yet. Run: gw2craft track sync[/]")
+        raise typer.Exit(1)
+    last = snaps[-1]
+    ago = (datetime.now(UTC).timestamp() - last["time"]) / 60
+    n_hist = db.execute("SELECT MIN(purchased), COUNT(*) FROM tp_history").fetchone()
+    console.print(f"[dim]Last synced {ago:.0f} min ago. Local history: {n_hist[1]} transactions "
+                  f"since {(n_hist[0] or '-')[:10]}.[/]")
+
+    # Account value
+    value = account_value(last)
+    line = f"[bold]Account value: {fmt(value)}[/]"
+    if len(snaps) > 1:
+        first = snaps[0]
+        change = value - account_value(first)
+        days = (last["time"] - first["time"]) / 86400
+        line += f"  ({'+' if change >= 0 else ''}{fmt(change)} since first snapshot, {days:.1f} days ago)"
+    console.print(line)
+    console.print(f"  wallet {fmt(last['wallet'])} · delivery {fmt(last['delivery_coins'])} · "
+                  f"open listings {fmt(last['listings_value'])} (after 10% fee) · "
+                  f"buy orders {fmt(last['buy_orders'])} · "
+                  f"stock {fmt(last['stock_value']) if last['stock_value'] is not None else 'not counted'} "
+                  "(if sold instantly, after tax)")
+
+    # Cash flow
+    t = Table(title="Cash flow (exact: sells after 15% fees minus coins spent on buys)",
+              title_justify="left", header_style="bold")
+    for col in ("Period", "Sold (net)", "Spent", "Cash flow", "Sells", "Buys"):
+        t.add_column(col, justify="left" if col == "Period" else "right")
+    for d in (7, 30, 90):
+        cf = cash_flow(db, d)
+        colour = "green" if cf.profit >= 0 else "red"
+        t.add_row(f"last {d} days", fmt(cf.sold_net), fmt(cf.spent), f"[{colour}]{fmt(cf.profit)}[/]",
+                  str(cf.sells), str(cf.buys))
+    console.print(t)
+    console.print("[dim]Cash flow is not profit: coins spent on items you still hold (or used in crafts) "
+                  "count as spent. Per-item profit comes next (FIFO matching).[/]")
+
+    # Unsold
+    lst = open_listings(db)
+    t = Table(title=f"Open listings ({len(lst)})", title_justify="left", header_style="bold")
+    for col in ("Item", "Qty", "My price", "Lowest now", "Age", "Status", "Suggestion"):
+        t.add_column(col, justify="right" if col in ("Qty", "My price", "Lowest now", "Age") else "left",
+                     overflow="fold")
+    for x in lst:
+        t.add_row(x.name, str(x.qty), fmt(x.my_price), fmt(x.lowest), f"{x.age_days:.1f}d", x.status, x.suggestion)
+    console.print(t)
+
+    orders = open_orders(db)
+    t = Table(title=f"Open buy orders ({len(orders)})", title_justify="left", header_style="bold")
+    for col in ("Item", "Qty", "My price", "Highest now", "Age", "Status"):
+        t.add_column(col, justify="right" if col in ("Qty", "My price", "Highest now", "Age") else "left")
+    for o in orders:
+        t.add_row(o.name, str(o.qty), fmt(o.my_price), fmt(o.highest), f"{o.age_days:.1f}d", o.status)
+    console.print(t)
+
+    if last["delivery_coins"] or last["delivery_items"]:
+        console.print(f"[yellow]📦 You have {fmt(last['delivery_coins'])} and {last['delivery_items']} items "
+                      "to pick up at a Black Lion Trader.[/]")
+    else:
+        console.print("📦 Delivery box is empty.")
+
+
+@track_app.command("items")
+def track_items(
+    period: int = typer.Option(30, help="Days to look back (0 = all local history)."),
+    top: int = typer.Option(10, help="How many best and worst items to show."),
+) -> None:
+    """Per-item results: what performed well, what didn't (FIFO buy/sell matching)."""
+    from .performance import item_results
+
+    db = sync_mod.connect()
+    rows = item_results(db, days=period or None)
+    if not rows:
+        console.print("[yellow]No sales in this period. Run: gw2craft track sync[/]")
+        raise typer.Exit(0)
+    label = f"last {period} days" if period else "all local history"
+    traded = sorted([r for r in rows if r.known_units], key=lambda r: r.trade_profit, reverse=True)
+    loot = sorted([r for r in rows if r.basis["loot"]], key=lambda r: r.loot_revenue, reverse=True)
+    trade_profit = sum(r.trade_profit for r in traded)
+    loot_rev = sum(r.loot_revenue for r in loot)
+    console.print(f"[bold]{len(rows)} items sold ({label}).[/]")
+    console.print(f"  Profit on items with a known cost: [bold]{fmt(round(trade_profit))}[/]  "
+                  f"({len(traded)} items)")
+    console.print(f"  Loot sales (no known cost, revenue only): [bold]{fmt(round(loot_rev))}[/]  ({len(loot)} items)")
+    counts = {b: sum(r.basis[b] for r in rows) for b in ("exact", "logged", "estimated", "loot")}
+    console.print(f"[dim]Units sold by cost basis: exact (matched to your TP buys) {counts['exact']}, "
+                  f"logged crafts {counts['logged']}, estimated craft cost {counts['estimated']}, "
+                  f"loot {counts['loot']}.[/]")
+
+    def table(title: str, part):
+        t = Table(title=title, title_justify="left", header_style="bold")
+        for col in ("Item", "Sold", "Revenue (net)", "Cost", "Profit", "ROI", "Avg days to sell", "Basis", "Held"):
+            t.add_column(col, justify="left" if col in ("Item", "Basis") else "right")
+        for r in part:
+            rev = r.revenue - r.loot_revenue
+            colour = "green" if r.trade_profit >= 0 else "red"
+            t.add_row(r.name, str(r.known_units), fmt(round(rev)), fmt(round(r.cost)),
+                      f"[{colour}]{fmt(round(r.trade_profit))}[/]",
+                      roi_text(r.trade_profit / r.cost) if r.cost else "-",
+                      f"{r.avg_days_to_sell:.1f}" if r.avg_days_to_sell is not None else "-",
+                      r.label.replace(" + loot", ""), str(r.held) if r.held else "")
+        console.print(t)
+
+    if traded:
+        table(f"Performed well: best {min(top, len(traded))}", traded[:top])
+    losers = [r for r in reversed(traded) if r.trade_profit < 0][:top]
+    if losers:
+        table(f"Didn't perform: worst {len(losers)}", losers)
+    if loot:
+        t = Table(title=f"Top loot sales ({min(top, len(loot))} of {len(loot)})", title_justify="left",
+                  header_style="bold")
+        for col in ("Item", "Sold", "Revenue (net)", "Avg days to sell"):
+            t.add_column(col, justify="left" if col == "Item" else "right")
+        for r in loot[:top]:
+            t.add_row(r.name, str(r.basis["loot"]), fmt(round(r.loot_revenue)),
+                      f"{r.avg_days_to_sell:.1f}" if r.avg_days_to_sell is not None else "-")
+        console.print(t)
+    console.print("[dim]exact = matched to your TP buys (FIFO). estimated = craft cost saved at sync time "
+                  "(you can craft it; we don't know if you did — log runs with `gw2craft track craft`). "
+                  "Avg days to sell 0.0 = sold instantly to a buy order.[/]")
+
+
+@track_app.command("craft")
+def track_craft(
+    item: str = typer.Argument(..., help="Item name or ID you crafted."),
+    qty: int = typer.Argument(..., help="How many you made."),
+    cost: str | None = typer.Option(None, help="Real cost per item, e.g. 1g20s. Default: today's craft cost (patient)."),
+    note: str = typer.Option("", help="Optional note."),
+) -> None:
+    """Log a craft run, so its sales use your real cost instead of an estimate."""
+    import time as _time
+    from .tracking import craft_cost_now, ensure_schema
+
+    db = sync_mod.connect()
+    ensure_schema(db)
+    item_id = _find_item(db, item)
+    if cost is not None:
+        each = _money(cost)
+    else:
+        each = craft_cost_now(build_solver(db, Mode.PATIENT), item_id)
+        if each is None:
+            console.print("[red]Can't work out a craft cost for this item. Give one with --cost.[/]")
+            raise typer.Exit(1)
+    db.execute("INSERT INTO craft_runs (time, item_id, quantity, cost_each, note) VALUES (?,?,?,?,?)",
+               (int(_time.time()), item_id, qty, each, note))
+    db.commit()
+    name = db.execute("SELECT name FROM items WHERE id=?", (item_id,)).fetchone()[0]
+    console.print(f"[green]Logged:[/] {qty} × {name} at {fmt(each)} each "
+                  f"({'your cost' if cost else 'today' + chr(39) + 's patient craft cost'}).")
 
 
 @app.callback()

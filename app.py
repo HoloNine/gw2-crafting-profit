@@ -2,13 +2,15 @@
 
 Run:  uv run --extra ui streamlit run app.py     (or: uv run gw2craft ui)
 
-Uses the same code as the CLI, so numbers match `gw2craft find / hints / show / legendary`.
+Tabs: Account (TP performance dashboard), Find, Missing recipes, Item details, Legendaries.
+Uses the same code as the CLI, so numbers match `gw2craft find / hints / show / legendary / track`.
 Money columns are in gold (1 gold = 100 silver = 10,000 copper) so they sort properly.
 """
 
 from __future__ import annotations
 
 import asyncio
+import io
 import os
 
 import pandas as pd
@@ -44,7 +46,7 @@ def plain(markup: str) -> str:
 
 
 def render_text(renderable) -> str:
-    c = Console(width=160, record=True, color_system=None)
+    c = Console(width=160, record=True, color_system=None, file=io.StringIO())  # don't echo to the terminal
     c.print(renderable)
     return c.export_text()
 
@@ -150,7 +152,15 @@ with st.sidebar:
                "Fast = buy and sell instantly.  \nProfit is per craft, after the 15% TP tax.")
 
 prices_at = sync_mod.get_meta(conn, "prices_synced_at") or ""
-tab_find, tab_hints, tab_item, tab_leg = st.tabs(["Find", "Missing recipes", "Item details", "Legendaries"])
+tab_acct, tab_find, tab_hints, tab_item, tab_leg = st.tabs(
+    ["📈 Account", "Find", "Missing recipes", "Item details", "Legendaries"])
+
+
+# ---------- Account dashboard ----------
+
+with tab_acct:
+    from gw2craft import ui_account
+    ui_account.render(has_key=bool(os.environ.get("GW2_API_KEY")))
 
 
 # ---------- Find ----------

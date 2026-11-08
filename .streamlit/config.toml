@@ -1,0 +1,6 @@
+[theme]
+base = "dark"
+primaryColor = "#e3b341"
+
+[server]
+address = "127.0.0.1"   # local only: your API key stays on this machine

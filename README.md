@@ -38,6 +38,40 @@ gw2craft hints                      good recipes you don't have yet (or can't cr
   --top 30
 ```
 
+## Account tracking (Trading Post results)
+
+```
+gw2craft track sync       # pull TP history, open orders, delivery box, wallet; save a snapshot
+gw2craft track summary    # account value, cash flow 7/30/90 days, open listings, buy orders
+gw2craft track items --period 30   # per item: what performed well / badly, loot sales
+gw2craft track craft "<item>" 10 [--cost 1g20s]   # log a craft run with its real cost
+```
+
+**Per-item profit:** each unit sold gets its cost from, in order:
+1. **exact**: an earlier TP buy of the same item, matched first-bought = first-sold (FIFO).
+2. **logged**: a craft run you logged with `track craft`.
+3. **estimated**: you can craft it, so its craft cost (patient prices, saved at each
+   sync) is used. The tool can't know if you really crafted it.
+4. **loot**: none of the above (drops, gathering, bought before your history).
+   Revenue only. Loot is shown separately so it doesn't look like trading profit.
+
+Needs key permissions `account`, `tradingpost`, `wallet` (`inventories` + `characters`
+to value your stock).
+
+**The GW2 API only keeps 90 days of TP history.** Every sync saves all transactions
+locally (unique on id), so your history keeps growing. Sync at least every few weeks:
+anything older than 90 days that was never synced is lost.
+
+What the numbers mean:
+- **Cash flow (exact):** sells after the 15% fees, minus coins spent on buys. It is
+  not profit: coins spent on items you still hold or used in crafts count as spent.
+  Listing fees of cancelled listings are not in the API, so they're not counted.
+- **Account value:** wallet + delivery box + open listings (after the 10% exchange fee
+  still to pay; the 5% listing fee is already paid) + coins locked in buy orders +
+  stock (items you own, valued as if sold instantly to buy orders, after tax).
+- **Open listings:** ✅ lowest / ⚠ undercut / ⏳ old (> 7 days), with a suggestion.
+  If relisting costs more than the gap, it says "wait".
+
 ## Web UI (Streamlit)
 
 ```
@@ -45,7 +79,20 @@ uv sync --extra ui
 uv run gw2craft ui          # or: uv run --extra ui streamlit run app.py
 ```
 
-Opens in your browser with four tabs: **Find** (filters, both modes, CSV download),
+Dark theme, local only (bound to `127.0.0.1` in `.streamlit/config.toml`; your API
+key never leaves this machine). Charts use Plotly.
+
+**📈 Account** is the TP performance dashboard: a **Sync account** button (max once
+per minute) and four views:
+- **Overview**: profit for 7 / 30 / 90 days (trading + loot, explained on hover),
+  account value with its trend, gold per day, 30-day cash flow, wallet, delivery box;
+  a stacked account-value chart and a green/red daily cash-flow chart.
+- **Items**: period picker; best 10 and worst 10 by trading profit; full table with
+  sold, revenue, cost, profit, ROI, days to sell, cost basis and wiki links; loot sales apart.
+- **Unsold**: open listings with status and a suggestion, plus listings by age.
+- **Orders**: open buy orders (top / outbid) and the delivery box.
+
+The other tabs: **Find** (filters, both modes, CSV download),
 **Missing recipes** (hints with wiki links), **Item details** (profit, craft tree,
 shopping list, what's locked) and **Legendaries**. It uses the same code as the
 CLI, so the numbers match. Money columns are in gold so they sort properly.

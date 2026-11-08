@@ -74,6 +74,37 @@ class GW2Api:
             delay = min(delay * 2, 30)
         raise AssertionError("unreachable")
 
+    async def get_pages(self, path: str, auth: bool = False, page_size: int = 200) -> list[dict]:
+        """Fetch every page of a paginated endpoint (e.g. TP transactions).
+
+        Loops page=0.. until the X-Page-Total header says we have them all.
+        """
+        out: list[dict] = []
+        page, total = 0, 1
+        headers = {}
+        if auth:
+            if not self.api_key:
+                raise RuntimeError("This needs an API key. Set GW2_API_KEY.")
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        while page < total:
+            delay = 1.0
+            for attempt in range(self._retries + 1):
+                async with self._sem:
+                    r = await self._client.get(path, params={"page": page, "page_size": page_size},
+                                               headers=headers)
+                if r.status_code in (200, 206):
+                    break
+                if r.status_code != 429 and r.status_code < 500:
+                    raise RuntimeError(f"GW2 API error {r.status_code} on {path}: {r.text[:200]}")
+                if attempt == self._retries:
+                    raise RuntimeError(f"GW2 API gave {r.status_code} on {path} after retries")
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 30)
+            out.extend(r.json())
+            total = int(r.headers.get("X-Page-Total", 1) or 1)
+            page += 1
+        return out
+
     async def get_many(self, path: str, ids: Iterable[int], auth: bool = False) -> list[dict]:
         """Fetch many objects by ID, 200 per call, several calls at once."""
         id_list = sorted(set(ids))
