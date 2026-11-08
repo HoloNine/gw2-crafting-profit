@@ -232,6 +232,17 @@ async def sync_all(db: sqlite3.Connection, force_static: bool = False, force_pri
         else:
             log(f"Recipes and items are fresh ({rec_age / 3600:.1f}h old). Skipping.")
 
+        # Mystic Forge items added by hand: fetch any we don't have yet (cheap).
+        have = {r[0] for r in db.execute("SELECT id FROM items")}
+        missing = mystic_forge_item_ids() - have
+        if missing:
+            items = await api.get_many("/items", missing)
+            db.executemany("INSERT OR REPLACE INTO items VALUES (?,?,?,?,?,?,?)", [
+                (it["id"], it["name"], it.get("type"), it.get("rarity"), it.get("level"),
+                 it.get("vendor_value"), json.dumps(it.get("flags", []))) for it in items])
+            db.commit()
+            log(f"Items:   fetched {len(items)} Mystic Forge items")
+
         sheet_age = age_seconds(db, "sheets_synced_at")
         if force_static or sheet_age is None or sheet_age > STATIC_MAX_AGE:
             log("Sheets:  scanning all items for recipe sheets (weekly, ~1-2 min)...")

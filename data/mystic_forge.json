@@ -1,4 +1,76 @@
 {
-  "_comment": "Hand-kept Mystic Forge recipes, from the official GW2 Wiki. Key = output item ID. Add 'random': true for random outputs, plus 'avg_count' only if confirmed.",
-  "_example": { "output_count": 1, "ingredients": [ { "id": 0, "count": 1 } ], "source": "https://wiki.guildwars2.com/wiki/..." }
+  "_comment": "Hand-kept Mystic Forge recipes, from the official GW2 Wiki (raw page source, checked 2026-11-08). Key = output item ID. Add 'random': true for random outputs, plus 'avg_count' only if confirmed. 'name' is for humans only.",
+
+  "30704": {
+    "name": "Twilight",
+    "generation": 1,
+    "output_count": 1,
+    "ingredients": [
+      { "id": 29185, "count": 1, "name": "Dusk" },
+      { "id": 19648, "count": 1, "name": "Gift of Twilight" },
+      { "id": 19674, "count": 1, "name": "Gift of Mastery" },
+      { "id": 19626, "count": 1, "name": "Gift of Fortune" }
+    ],
+    "source": "https://wiki.guildwars2.com/wiki/Twilight"
+  },
+
+  "19648": {
+    "name": "Gift of Twilight",
+    "output_count": 1,
+    "ingredients": [
+      { "id": 19621, "count": 1, "name": "Gift of Metal" },
+      { "id": 19631, "count": 1, "name": "Gift of Darkness" },
+      { "id": 19676, "count": 100, "name": "Icy Runestone" },
+      { "id": 24570, "count": 1, "name": "Superior Sigil of Blood" }
+    ],
+    "source": "https://wiki.guildwars2.com/wiki/Gift_of_Twilight"
+  },
+
+  "19674": {
+    "name": "Gift of Mastery",
+    "output_count": 1,
+    "ingredients": [
+      { "id": 20797, "count": 1, "name": "Bloodstone Shard" },
+      { "id": 19925, "count": 250, "name": "Obsidian Shard" },
+      { "id": 19677, "count": 1, "name": "Gift of Exploration" },
+      { "id": 19678, "count": 1, "name": "Gift of Battle" }
+    ],
+    "source": "https://wiki.guildwars2.com/wiki/Gift_of_Mastery"
+  },
+
+  "19626": {
+    "name": "Gift of Fortune",
+    "output_count": 1,
+    "ingredients": [
+      { "id": 19675, "count": 77, "name": "Mystic Clover" },
+      { "id": 19721, "count": 250, "name": "Glob of Ectoplasm" },
+      { "id": 19673, "count": 1, "name": "Gift of Magic" },
+      { "id": 19672, "count": 1, "name": "Gift of Might" }
+    ],
+    "source": "https://wiki.guildwars2.com/wiki/Gift_of_Fortune"
+  },
+
+  "19672": {
+    "name": "Gift of Might",
+    "output_count": 1,
+    "ingredients": [
+      { "id": 24357, "count": 250, "name": "Vicious Fang" },
+      { "id": 24289, "count": 250, "name": "Armored Scale" },
+      { "id": 24351, "count": 250, "name": "Vicious Claw" },
+      { "id": 24358, "count": 250, "name": "Ancient Bone" }
+    ],
+    "source": "https://wiki.guildwars2.com/wiki/Gift_of_Might"
+  },
+
+  "19673": {
+    "name": "Gift of Magic",
+    "output_count": 1,
+    "ingredients": [
+      { "id": 24295, "count": 250, "name": "Vial of Powerful Blood" },
+      { "id": 24283, "count": 250, "name": "Powerful Venom Sac" },
+      { "id": 24300, "count": 250, "name": "Elaborate Totem" },
+      { "id": 24277, "count": 250, "name": "Pile of Crystalline Dust" }
+    ],
+    "source": "https://wiki.guildwars2.com/wiki/Gift_of_Magic"
+  }
 }

@@ -79,6 +79,34 @@ def path_recipes(node: Node) -> list[Recipe]:
     return list(seen.values())
 
 
+def evaluate(solver: Solver, recipe: Recipe,
+             status_of: Callable[[Recipe], Status] | None = None) -> ProfitRow | None:
+    """Profit for one recipe, with no filters (profit may be negative).
+
+    None if the output can't be sold on the TP, or the craft can't be priced.
+    """
+    item = solver.items.get(recipe.output_item_id)
+    quote = solver.quotes.get(recipe.output_item_id)
+    if item is None or quote is None or item.bound:
+        return None
+    price = sell_price(quote, solver.mode)
+    if price is None:
+        return None
+    node = solver.craft(recipe)
+    if not node.ok:
+        return None
+    cost = round(node.unit_cost * recipe.output_count)
+    income = net(price, recipe.output_count)
+    profit = income - cost
+    roi = profit / cost if cost > 0 else 0.0
+    row = ProfitRow(recipe, item.id, item.name, solver.mode, cost, price, income, profit, roi, node)
+    if status_of:
+        row.unlock = status_of(recipe)
+        row.locked_sub = [(r, s) for r in path_recipes(node)
+                          if not (s := status_of(r)).ready and r.id != recipe.id]
+    return row
+
+
 def find_profits(
     solver: Solver,
     min_profit: int = 1,
@@ -102,36 +130,21 @@ def find_profits(
             continue
         if not solver.allowed(recipe):
             continue
-        item = solver.items.get(recipe.output_item_id)
         quote = solver.quotes.get(recipe.output_item_id)
-        if item is None or quote is None or item.bound:
-            continue  # output can't be sold on the TP
-        price = sell_price(quote, solver.mode)
-        if price is None:
+        if (solver.mode is Mode.PATIENT and max_spread and quote is not None
+                and not trusted_listing(quote, max_spread)):
             continue
-        if solver.mode is Mode.PATIENT and max_spread and not trusted_listing(quote, max_spread):
+        row = evaluate(solver, recipe, status_of)
+        if row is None:
             continue
-
-        node = solver.craft(recipe)
-        if not node.ok or (node.needs_own and not include_own):
+        if row.node.needs_own and not include_own:
             continue
-        cost = round(node.unit_cost * recipe.output_count)
-        if cost <= 0:
+        if row.craft_cost <= 0:
             continue  # nothing priced to compare against (all own mats)
-        if max_cost is not None and cost > max_cost:
+        if max_cost is not None and row.craft_cost > max_cost:
             continue
-
-        income = net(price, recipe.output_count)
-        profit = income - cost
-        roi = profit / cost
-        if profit < min_profit or roi < min_roi:
+        if row.profit < min_profit or row.roi < min_roi:
             continue
-        row = ProfitRow(recipe, item.id, item.name, solver.mode, cost, price,
-                        income, profit, roi, node)
-        if status_of:
-            row.unlock = status_of(recipe)
-            row.locked_sub = [(r, s) for r in path_recipes(node)
-                              if not (s := status_of(r)).ready and r.id != recipe.id]
         rows.append(row)
     rows.sort(key=lambda r: r.profit, reverse=True)
     return rows

@@ -17,7 +17,7 @@ from . import sync as sync_mod
 from .account import Account, fetch_account, flag_status, load_env
 from .hints import is_missing
 from .api import GW2Api
-from .pricing import Mode, parse_money
+from .pricing import Mode, fmt, parse_money, roi_text
 from .profit import find_profits
 from .report import export, print_rows
 from .solver import build_solver
@@ -215,6 +215,314 @@ def hints(
             console.print(line, soft_wrap=True)
         console.print()
     console.print("[dim]Levelling a discipline: see https://gw2crafts.net. Prices move; check the TP before buying.[/]")
+
+
+def _find_item(db, query: str) -> int:
+    """Item ID from an ID or a name. Exits with a short list if the name is unclear."""
+    q = query.strip()
+    if q.isdigit():
+        if db.execute("SELECT 1 FROM items WHERE id = ?", (int(q),)).fetchone():
+            return int(q)
+        console.print(f"[red]No item with ID {q} in the cache.[/]")
+        raise typer.Exit(1)
+    exact = db.execute("SELECT id FROM items WHERE name = ? COLLATE NOCASE", (q,)).fetchall()
+    craftable = {r[0] for r in db.execute("SELECT DISTINCT output_item_id FROM recipes")}
+    if exact:
+        ids = [r[0] for r in exact]
+        best = [i for i in ids if i in craftable] or ids
+        return best[0]
+    like = db.execute("SELECT id, name FROM items WHERE name LIKE ? ORDER BY length(name) LIMIT 50",
+                      (f"%{q}%",)).fetchall()
+    like = [r for r in like if r[0] in craftable] or like
+    if len(like) == 1:
+        return like[0][0]
+    if not like:
+        console.print(f"[red]No item matches {q!r}.[/]")
+    else:
+        console.print(f"[yellow]{q!r} matches several items. Use the exact name or the ID:[/]")
+        for iid, name in like[:12]:
+            console.print(f"  {iid:>7}  {name}")
+    raise typer.Exit(1)
+
+
+@app.command()
+def show(
+    item: str = typer.Argument(..., help="Item name or ID."),
+    mode: ModeChoice = typer.Option(ModeChoice.patient, help="Mode for the tree and shopping list (patient or fast)."),
+    qty: int = typer.Option(1, help="How many crafts to make (shopping list)."),
+    recipe_id: int | None = typer.Option(None, "--recipe", help="Use this recipe ID if several make the item."),
+    mine: bool = typer.Option(False, "--mine", help="Only use recipes you know; buy parts you can't craft."),
+) -> None:
+    """Full craft tree, shopping list and what's still locked, for one item."""
+    from .hints import level_part, wiki_url
+    from .pricing import net
+    from .profit import CHECK_ROI, evaluate, path_recipes, trusted_listing
+    from .report import craft_tree, leaf_prices, shopping_table
+    from .solver import load_timegated, shopping_list
+    from .unlocks import SheetPricer, how_to_get, load_npc_sheets, load_sheet_map, unlock_type
+
+    if mode is ModeChoice.both:
+        raise typer.BadParameter("show draws one tree: use patient or fast (both modes are in the summary)")
+    db = sync_mod.connect()
+    asyncio.run(sync_mod.sync_all(db, log=lambda *_: None))
+    acct = _load_account() if mine else (_load_account(required=False) if os.environ.get("GW2_API_KEY") else None)
+    status_of = acct.status if acct else None
+    allowed = acct.can_craft if (mine and acct) else None
+
+    item_id = _find_item(db, item)
+    solvers = {m: build_solver(db, m, recipe_allowed=allowed) for m in (Mode.PATIENT, Mode.FAST)}
+    main_mode = Mode(mode.value)
+    s = solvers[main_mode]
+    names = {i: it.name for i, it in s.items.items()}
+    name = names.get(item_id, str(item_id))
+    quote = s.quotes.get(item_id)
+    recipes = [r for r in s.recipes_for(item_id) if not r.mystic_forge and r.only_items]
+
+    console.print(f"[bold]{name}[/] (item {item_id})")
+    if quote:
+        console.print(f"  TP: top buy order {fmt(quote.buy_price)}, lowest listing {fmt(quote.sell_price)}")
+    else:
+        console.print("  Not on the TP.")
+    if not recipes:
+        console.print("[yellow]No normal crafting recipe makes this item.[/] "
+                      f"Wiki: {wiki_url(name)}")
+        raise typer.Exit(0)
+
+    rows = {m: {r.id: evaluate(solvers[m], r, status_of) for r in recipes} for m in solvers}
+    if recipe_id is not None:
+        if recipe_id not in rows[main_mode]:
+            raise typer.BadParameter(f"Recipe {recipe_id} doesn't make {name}. "
+                                     f"Options: {', '.join(str(r.id) for r in recipes)}")
+        recipe = next(r for r in recipes if r.id == recipe_id)
+    else:
+        def cost_of(r):
+            n = s.craft(r)
+            return n.unit_cost if n.ok else float("inf")
+        recipe = min(recipes, key=cost_of)
+    if len(recipes) > 1:
+        console.print(f"  {len(recipes)} recipes make this. Showing recipe {recipe.id} "
+                      f"(cheapest in {main_mode.value} mode). Others: "
+                      f"{', '.join(str(r.id) for r in recipes if r.id != recipe.id)} (use --recipe).")
+    console.print(f"  Recipe {recipe.id}: {discipline_text_for(recipe)} — {how_to_get(recipe)}")
+    if acct:
+        st = acct.status(recipe)
+        lp = level_part(recipe, st, acct)
+        console.print(f"  Your status: {'✅ have it' if st.ready else '⚠ ' + st.text()}" + (f" — {lp}" if lp else ""))
+
+    # Profit in both modes.
+    t = Table(title="Profit per craft (after 15% tax)", title_justify="left", header_style="bold")
+    for col in ("Mode", "Craft cost", "Sell at", "Net", "Profit", "ROI", "Note"):
+        t.add_column(col, justify="left" if col in ("Mode", "Note") else "right")
+    for m in (Mode.PATIENT, Mode.FAST):
+        r = rows[m].get(recipe.id)
+        if r is None:
+            t.add_row(m.value, "-", "-", "-", "-", "-", "can't price (no TP price or parts)")
+            continue
+        notes = []
+        if m is Mode.PATIENT and quote and not trusted_listing(quote, 2.0):
+            notes.append("listing far above buy orders: price may not be real")
+        if r.roi > CHECK_ROI:
+            notes.append("check: very high ROI")
+        if r.node.needs_own:
+            notes.append("cost leaves out own materials")
+        colour = "green" if r.profit > 0 else "red"
+        t.add_row(m.value, fmt(r.craft_cost), fmt(r.sell_price), fmt(r.net),
+                  f"[{colour}]{fmt(r.profit)}[/]", roi_text(r.roi), "; ".join(notes))
+    console.print(t)
+
+    # Tree + shopping list (main mode).
+    node = s.craft(recipe)
+    if not node.ok:
+        console.print("[red]Can't work out a craft cost: some part can't be bought or crafted.[/]")
+        raise typer.Exit(1)
+    amount = recipe.output_count * qty
+    console.print(craft_tree(node, amount, names, f"Craft tree ({main_mode.value}, {qty} craft{'s' if qty > 1 else ''})",
+                             status_of, load_timegated()))
+    console.print(shopping_table(shopping_list(node, amount), leaf_prices(node), names,
+                                 f"Shopping list ({main_mode.value}, {qty} craft{'s' if qty > 1 else ''})"))
+    r = rows[main_mode].get(recipe.id)
+    if r:
+        console.print(f"  Selling {amount} at {fmt(r.sell_price)} each nets "
+                      f"{fmt(net(r.sell_price, amount))} → profit {fmt(net(r.sell_price, amount) - r.craft_cost * qty)}")
+
+    # What's locked.
+    if acct:
+        pricer = SheetPricer(load_sheet_map(db), s.quotes, load_npc_sheets(), names, main_mode)
+        locked = [(rc, st) for rc in [recipe, *path_recipes(node)] if not (st := acct.status(rc)).ready]
+        if not locked:
+            console.print("[green]✅ You can craft everything in this tree.[/]")
+        else:
+            console.print(f"[yellow]⚠ Still locked ({len(locked)}):[/]")
+            for rc, st in locked:
+                n = names.get(rc.output_item_id, str(rc.output_item_id))
+                bits = [how_to_get(rc)]
+                link = wiki_url(n)
+                if unlock_type(rc) == "sheet":
+                    c = pricer.cost(rc.id)
+                    if c.gold is not None:
+                        bits.append(f"sheet {c.text()}")
+                    if c.sheet_item_id and c.sheet_item_id in names:
+                        link = wiki_url(names[c.sheet_item_id])
+                if lp := level_part(rc, st, acct):
+                    bits.append(lp)
+                console.print(f"  - {n}: {'  |  '.join(bits)}", soft_wrap=True)
+                console.print(f"    {link}", soft_wrap=True)
+    else:
+        console.print("[dim]Add your API key to see which recipes in this tree you're missing.[/]")
+
+
+def discipline_text_for(recipe) -> str:
+    return " / ".join(f"{d} {recipe.min_rating}" for d in recipe.disciplines)
+
+
+@app.command()
+def legendary(
+    item: str | None = typer.Argument(None, help="Legendary name or ID. Leave out to list them."),
+    mine: bool = typer.Option(False, "--mine", help="Show what you already own (needs inventories permission)."),
+) -> None:
+    """Sellable legendaries: TP parts, own materials, profit after tax, competition."""
+    from .account import fetch_owned
+    from .hints import level_part, wiki_url
+    from .legendary import build_report, item_info, legendary_recipes, parse_listings, sellable_legendaries
+    from .solver import load_timegated
+    from .report import craft_tree
+    from .unlocks import how_to_get
+
+    db = sync_mod.connect()
+    asyncio.run(sync_mod.sync_all(db, log=lambda *_: None))
+    has_key = bool(os.environ.get("GW2_API_KEY"))
+    acct = _load_account() if mine else (_load_account(required=False) if has_key else None)
+    owned: dict[int, int] = {}
+    if mine and acct:
+        async def get_owned():
+            async with GW2Api() as api:
+                return await fetch_owned(api)
+        owned = asyncio.run(get_owned())
+
+    types, rarity = item_info(db)
+    solvers = {m: build_solver(db, m, with_mystic_forge=True) for m in (Mode.PATIENT, Mode.FAST)}
+    sp = solvers[Mode.PATIENT]
+    names = {i: it.name for i, it in sp.items.items()}
+    recipes = {r.output_item_id: r for r in legendary_recipes(sp, rarity)}
+
+    async def get_listings(ids):
+        async with GW2Api() as api:
+            return {x["id"]: parse_listings(x) for x in await api.get_many("/commerce/listings", ids)}
+    listings = asyncio.run(get_listings(list(recipes))) if recipes else {}
+    status_of = acct.status if acct else None
+
+    if item is None:
+        t = Table(title="Sellable legendaries with a Mystic Forge recipe (patient mode)",
+                  title_justify="left", header_style="bold")
+        for col in ("Legendary", "Precursor (TP)", "TP parts total", "Own mats", "Sell at", "Net",
+                    "Profit (own mats free)", "Profit (your values)", "Sell listings"):
+            t.add_column(col, justify="left" if col in ("Legendary",) else "right")
+        for iid, rec in sorted(recipes.items(), key=lambda kv: names.get(kv[0], "")):
+            rep = build_report(sp, rec, types, status_of, owned)
+            li = listings.get(iid)
+            t.add_row(rep.name, fmt(rep.precursor_buy), fmt(rep.tp_total), f"{len(rep.own)} kinds",
+                      fmt(rep.sell), fmt(rep.net), fmt(rep.profit_own_free),
+                      fmt(rep.profit_with_values) if sp.own_values else "-",
+                      f"{li.sell_listings}" if li else "?")
+        console.print(t)
+        missing = [lg for lg in sellable_legendaries(db) if lg.id not in recipes]
+        console.print(f"[dim]{len(missing)} other sellable legendaries have no recipe in "
+                      "data/mystic_forge.json yet. They are added one at a time from the wiki.[/]")
+        console.print("[yellow]'Own mats free' is not real gold profit: it counts your account-bound "
+                      "parts (map completion, WvW, clovers...) as free.[/]")
+        return
+
+    item_id = _find_item(db, item)
+    if item_id not in recipes:
+        console.print(f"[yellow]{names.get(item_id, item)} has no Mystic Forge recipe in data/mystic_forge.json yet.[/]")
+        raise typer.Exit(1)
+    rec = recipes[item_id]
+    reps = {m: build_report(solvers[m], rec, types, status_of, owned) for m in solvers}
+    rp = reps[Mode.PATIENT]
+    li = listings.get(item_id)
+
+    console.print(f"[bold]{rp.name}[/] (item {item_id}) — recipe source: {rec.url}")
+    q = sp.quotes.get(item_id)
+    if q:
+        console.print(f"  TP: top buy order {fmt(q.buy_price)}, lowest listing {fmt(q.sell_price)}")
+    if li:
+        console.print(f"  Competition: {li.sell_listings} sell listings ({li.sell_qty} items, "
+                      f"{li.at_lowest} at the lowest price), {li.buy_orders} buy orders")
+
+    # Precursor
+    if rp.precursor_id:
+        pname = names.get(rp.precursor_id, str(rp.precursor_id))
+        line = f"  Precursor {pname}: buy {fmt(rp.precursor_buy)} (patient) / {fmt(reps[Mode.FAST].precursor_buy)} (fast)"
+        pc = rp.precursor_craft
+        if pc is not None and pc.ok:
+            line += f"  |  craft: {fmt(round(pc.unit_cost))} in TP parts"
+            if pc.needs_own:
+                line += " + own materials (collections)"
+        console.print(line)
+
+    # Summary per mode
+    t = Table(title="Profit (one legendary, after 15% tax)", title_justify="left", header_style="bold")
+    for col in ("Mode", "TP parts", "Sell at", "Net", "Profit (own mats free)", "Profit (your values)"):
+        t.add_column(col, justify="left" if col == "Mode" else "right")
+    for m, r in reps.items():
+        pf = r.profit_own_free
+        colour = "green" if pf and pf > 0 else "red"
+        t.add_row(m.value, fmt(r.tp_total), fmt(r.sell), fmt(r.net),
+                  f"[{colour}]{fmt(pf)}[/]", fmt(r.profit_with_values) if sp.own_values else "-")
+    console.print(t)
+
+    # TP shopping list
+    t = Table(title="Buy on the TP (patient)", title_justify="left", header_style="bold")
+    for col in ("Item", "Qty", "Each", "Total"):
+        t.add_column(col, justify="left" if col == "Item" else "right")
+    for src, iid, qn, unit in rp.tp_parts:
+        t.add_row(names.get(iid, str(iid)) + (" (NPC)" if src == "vendor" else ""),
+                  f"{qn:g}", fmt(round(unit)), fmt(round(qn * unit)))
+    t.add_section()
+    t.add_row("[bold]Total[/]", "", "", f"[bold]{fmt(rp.tp_total)}[/]")
+    console.print(t)
+
+    # Own materials checklist
+    t = Table(title="You need these (can't buy on the TP)", title_justify="left", header_style="bold")
+    t.add_column("Item")
+    t.add_column("Need", justify="right")
+    t.add_column("Have", justify="right")
+    t.add_column("Your value each", justify="right")
+    t.add_column("Wiki")
+    for iid, need, value in rp.own:
+        n = names.get(iid, str(iid))
+        if mine:
+            have_n = owned.get(iid, 0)
+            have = f"[green]{have_n}[/]" if have_n >= need else f"[red]{have_n}[/]"
+        else:
+            have = "[dim]--mine[/]"
+        t.add_row(n, f"{need:g}", have, fmt(round(value)) if value else "-", f"[link={wiki_url(n)}]wiki[/link]")
+    console.print(t)
+    if rp.owned_parts:
+        console.print("  Already owned crafted parts (their ingredients are not counted): "
+                      + ", ".join(f"{u}× {names.get(i, i)}" for i, u, _ in rp.owned_parts))
+
+    # Locked recipes in the tree
+    if acct:
+        if rp.locked:
+            console.print(f"[yellow]⚠ Recipes you still need ({len(rp.locked)}):[/]")
+            for r, st in rp.locked:
+                n = names.get(r.output_item_id, str(r.output_item_id))
+                bits = [how_to_get(r)]
+                if lp := level_part(r, st, acct):
+                    bits.append(lp)
+                console.print(f"  - {n}: {'  |  '.join(bits)}  {wiki_url(n)}", soft_wrap=True)
+        else:
+            console.print("[green]✅ You know every crafting recipe in this tree.[/]")
+
+    console.print(craft_tree(rp.node, 1, names, "Craft tree (patient)", status_of, load_timegated()))
+    console.print(
+        "[yellow]Before you commit gold:[/]\n"
+        f"  - Tax: about {fmt(round((rp.sell or 0) * 0.15))} of the sale goes to fees. The 5% listing fee "
+        f"(~{fmt(round((rp.sell or 0) * 0.05))}) is paid again every time you cancel and relist.\n"
+        "  - Few buyers: a listing can wait days. Undercut by 1c, or wait.\n"
+        "  - The price can drop while you gather parts (often after patches).\n"
+        "  - 'Own mats free' profit is not real gold: most of the value is your own time.")
 
 
 @app.callback()

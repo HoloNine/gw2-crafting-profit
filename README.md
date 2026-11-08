@@ -28,6 +28,11 @@ gw2craft find                       profitable recipes, both price modes
   --discipline Weaponsmith          --top 50          --export out.csv|out.json
   --own-mats                        include recipes that need unbuyable materials
   --max-spread 2                    Patient: skip troll listings (0 = off)
+gw2craft show <item name or ID>     one item: profit in both modes, craft tree,
+  --mode patient|fast               shopping list and what's still locked (+ wiki links)
+  --qty 5  --recipe ID  --mine      --mine: only use recipes you know, buy the rest
+gw2craft legendary [name]           sellable legendaries with a Mystic Forge recipe:
+  --mine                            TP parts, own materials (have / need), profit, competition
 gw2craft hints                      good recipes you don't have yet (or can't craft yet),
   --discipline Weaponsmith          with how to get them and a GW2 Wiki link
   --top 30
@@ -78,7 +83,7 @@ The tool tells you **what** is missing. It does not plan levelling: use
 |---|---|---|
 | `vendor_prices.json` | NPC prices (copper) | empty, needs in-game checks |
 | `timegated.json` | once-a-day crafts | 6 ascended materials |
-| `mystic_forge.json` | Mystic Forge recipes for legendaries | empty, filled from the wiki one legendary at a time |
+| `mystic_forge.json` | Mystic Forge recipes for legendaries | Twilight (6 recipes), from the wiki's raw page source; more Gen 1 one at a time |
 | `own_materials.json` | your value for account-bound parts | empty |
 | `recipe_sheets.json` | NPC recipe sheet prices (optional, shown in hints if filled) | empty |
 
@@ -89,6 +94,8 @@ Never guess values for these files. Check them in game or on the GW2 Wiki.
 - Prices move. A small margin can be gone by the time you finish crafting.
 - Patient profits assume your orders fill. That can take time.
 - Results depend on the vendor price list being right.
+- Legendary "have" counts bank, material storage, shared slots and bags. Equipped
+  gear and wallet currencies (Spirit Shards, Karma) are not counted yet.
 - Expansion requirements are not tagged yet. The API doesn't say clearly which
   expansion a recipe needs, so the tool doesn't guess.
 - On a new account, many good recipes show as "you don't have it yet". That's

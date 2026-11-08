@@ -73,3 +73,11 @@ def test_locked_sub_recipes_are_counted():
     row = {r.item_id: r for r in find_profits(s, status_of=status)}[6]
     assert [r.id for r, _ in row.locked_sub] == [1]
     assert row.unlock_text == "learned +1 sub"
+
+
+def test_evaluate_returns_unprofitable_rows_too():
+    from gw2craft.profit import evaluate
+    s = Solver(RECIPES, ITEMS, {**QUOTES, INGOT: Quote(5, 6)}, Mode.FAST)
+    row = evaluate(s, RECIPES[0])
+    assert row is not None and row.profit < 0
+    assert evaluate(s, RECIPES[1]) is None  # bound output: not sellable

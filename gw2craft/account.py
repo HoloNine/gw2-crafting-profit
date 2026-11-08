@@ -162,6 +162,27 @@ def parse_character(c: dict) -> Character:
     )
 
 
+async def fetch_owned(api: GW2Api) -> dict[int, int]:
+    """Item counts you own: bank + material storage + shared slots + every character's bags.
+
+    Needs the `inventories` and `characters` permissions. Equipped gear is not counted.
+    """
+    counts: dict[int, int] = {}
+
+    def add(slot: dict | None) -> None:
+        if slot and slot.get("id"):
+            counts[slot["id"]] = counts.get(slot["id"], 0) + slot.get("count", 1)
+
+    for path in ("/account/bank", "/account/materials", "/account/inventory"):
+        for slot in await api.get(path, auth=True):
+            add(slot)
+    for char in await api.get("/characters", {"ids": "all"}, auth=True):
+        for bag in char.get("bags") or []:
+            for slot in (bag or {}).get("inventory", []):
+                add(slot)
+    return counts
+
+
 async def fetch_account(api: GW2Api) -> Account:
     token = await api.get("/tokeninfo", auth=True)
     perms = set(token.get("permissions", []))

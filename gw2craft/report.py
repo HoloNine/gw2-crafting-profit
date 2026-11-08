@@ -91,3 +91,88 @@ def export(rows: list[ProfitRow], path: Path) -> None:
                             "flags": "/".join(d["flags"])})
     else:
         raise ValueError("Export file must end in .csv or .json")
+
+
+# ---------- show: craft tree + shopping list ----------
+
+def qty_text(q: float) -> str:
+    return str(round(q)) if abs(q - round(q)) < 1e-9 else f"{q:.2f}"
+
+
+def craft_tree(node, amount: float, names: dict[int, str], label: str,
+               status_of=None, timegated: set[int] | None = None):
+    """Rich Tree of how each part is obtained, for `amount` units of node's item."""
+    from rich.tree import Tree
+
+    from .hints import wiki_url
+
+    def text(n, amt: float) -> str:
+        name = names.get(n.item_id, f"item {n.item_id}")
+        total = (n.unit_cost or 0) * amt
+        head = f"{qty_text(amt)} × [bold]{name}[/]"
+        if n.source == "craft" and n.recipe is not None:
+            if n.recipe.mystic_forge:
+                t = f"{head} — Mystic Forge {fmt(round(total))}"
+            else:
+                disc = "/".join(SHORT.get(d, d) for d in n.recipe.disciplines)
+                t = f"{head} — craft ({disc} {n.recipe.min_rating}) {fmt(round(total))}"
+            if status_of and not n.recipe.mystic_forge:
+                s = status_of(n.recipe)
+                if not s.ready:
+                    t += f"  [yellow]⚠ {s.text()}[/] [link={wiki_url(name)}]wiki[/link]"
+            if timegated and n.item_id in timegated:
+                t += "  [yellow](timegated: once a day)[/]"
+            return t
+        if n.source == "buy":
+            return f"{head} — buy on TP @ {fmt(round(n.unit_cost))} = {fmt(round(total))}"
+        if n.source == "vendor":
+            return f"{head} — buy from NPC @ {fmt(round(n.unit_cost))} = {fmt(round(total))}"
+        if n.source == "own":
+            return f"{head} — [magenta]own materials (can't buy on TP)[/]"
+        return f"{head} — [red]can't get[/]"
+
+    def add(tree, n, amt: float) -> None:
+        if n.source == "craft" and n.recipe is not None:
+            crafts = amt / n.recipe.output_count
+            for child, count in n.children:
+                add(tree.add(text(child, crafts * count)), child, crafts * count)
+
+    root = Tree(f"[bold]{label}[/]: {text(node, amount)}")
+    add(root, node, amount)
+    return root
+
+
+def shopping_table(items: dict[tuple[str, int], float], node_unit: dict[tuple[str, int], float],
+                   names: dict[int, str], title: str) -> Table:
+    t = Table(title=title, title_justify="left", header_style="bold")
+    t.add_column("Item", overflow="fold", max_width=40)
+    t.add_column("Qty", justify="right")
+    t.add_column("Where")
+    t.add_column("Each", justify="right")
+    t.add_column("Total", justify="right")
+    where = {"buy": "TP", "vendor": "NPC", "own": "[magenta]own mats[/]", "none": "[red]can't get[/]"}
+    grand = 0.0
+    for (src, iid), q in sorted(items.items(), key=lambda kv: -(node_unit.get(kv[0], 0) * kv[1])):
+        unit = node_unit.get((src, iid), 0.0)
+        grand += unit * q
+        each = fmt(round(unit)) if src in ("buy", "vendor") else "-"
+        tot = fmt(round(unit * q)) if src in ("buy", "vendor") else "-"
+        t.add_row(names.get(iid, f"item {iid}"), qty_text(q), where.get(src, src), each, tot)
+    t.add_section()
+    t.add_row("[bold]Total to spend[/]", "", "", "", f"[bold]{fmt(round(grand))}[/]")
+    return t
+
+
+def leaf_prices(node) -> dict[tuple[str, int], float]:
+    """(source, item_id) -> unit cost, for every leaf in the tree."""
+    out: dict[tuple[str, int], float] = {}
+
+    def walk(n) -> None:
+        if n.source == "craft" and n.recipe is not None:
+            for child, _ in n.children:
+                walk(child)
+        else:
+            out[(n.source, n.item_id)] = n.unit_cost or 0.0
+
+    walk(node)
+    return out
