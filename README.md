@@ -82,20 +82,25 @@ uv run gw2craft ui          # or: uv run --extra ui streamlit run app.py
 Dark theme, local only (bound to `127.0.0.1` in `.streamlit/config.toml`; your API
 key never leaves this machine). Charts use Plotly.
 
-**📈 Account** is the TP performance dashboard: a **Sync account** button (max once
-per minute) and four views:
-- **Overview**: profit for 7 / 30 / 90 days (trading + loot, explained on hover),
-  account value with its trend, gold per day, 30-day cash flow, wallet, delivery box;
-  a stacked account-value chart and a green/red daily cash-flow chart.
-- **Items**: period picker; best 10 and worst 10 by trading profit; full table with
-  sold, revenue, cost, profit, ROI, days to sell, cost basis and wiki links; loot sales apart.
-- **Unsold**: open listings with status and a suggestion, plus listings by age.
-- **Orders**: open buy orders (top / outbid) and the delivery box.
+Pages are in the sidebar, in three groups. Each page has its own link
+(e.g. `/find`, `/unsold`), so you can bookmark them.
 
-The other tabs: **Find** (filters, both modes, CSV download),
-**Missing recipes** (hints with wiki links), **Item details** (profit, craft tree,
-shopping list, what's locked) and **Legendaries**. It uses the same code as the
-CLI, so the numbers match. Money columns are in gold so they sort properly.
+**Account** (TP performance; every page has the **Sync account** button, max once per minute):
+- **Overview** (start page): profit for 7 / 30 / 90 days (trading + loot, explained on
+  hover), account value with its trend, gold per day, 30-day cash flow, wallet, delivery
+  box; a stacked account-value chart and a green/red daily cash-flow chart.
+- **Sold items**: period picker; best 10 and worst 10 by trading profit; full table with
+  sold, revenue, cost, profit, ROI, days to sell, cost basis and wiki links; loot sales apart.
+- **Unsold listings**: open listings with status and a suggestion, plus listings by age.
+- **Buy orders & delivery**: open buy orders (top / outbid) and the delivery box.
+
+**Crafting**: **Find recipes** (filters, both modes, CSV download), **Missing recipes**
+(hints with wiki links), **Item details** (profit, craft tree, shopping list, what's locked).
+
+**Legendaries**: the legendary report.
+
+It uses the same code as the CLI, so the numbers match. Money columns are in gold so
+they sort properly.
 
 With an API key, `find` shows a Status column (✅ have it / ⚠ missing recipe /
 ⚠ level too low / ⚠ missing sub-recipe), a clickable "wiki" link, and a short

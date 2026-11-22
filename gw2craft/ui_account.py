@@ -1,4 +1,4 @@
-"""Account performance dashboard (Streamlit tab): Overview, Items, Unsold, Orders.
+"""Account performance dashboard (Streamlit pages): Overview, Items, Unsold, Orders.
 
 Every number is labelled with how exact it is (see performance.py):
 - Profit (realized): sells after fees minus their cost; loot sales count as revenue only.
@@ -9,6 +9,7 @@ Every number is labelled with how exact it is (see performance.py):
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from datetime import UTC, datetime
 
@@ -292,9 +293,10 @@ def orders_page(conn) -> None:
                                         "Wiki": st.column_config.LinkColumn(display_text="wiki")})
 
 
-def render(has_key: bool) -> None:
-    """The whole Account tab."""
-    if not has_key:
+def _frame(title: str, body) -> None:
+    """Common top of every account page: title, API key check, Sync button."""
+    st.title(title)
+    if not os.environ.get("GW2_API_KEY"):
         st.info("Add your API key (GW2_API_KEY in .env, with account, tradingpost and wallet permissions) "
                 "to track your Trading Post results.")
         return
@@ -304,13 +306,20 @@ def render(has_key: bool) -> None:
     if not snapshots(conn):
         st.info("Click **Sync account** to pull your Trading Post data for the first time.")
         return
-    synced = synced_at or ""
-    t_over, t_items, t_unsold, t_orders = st.tabs(["Overview", "Items", "Unsold", "Orders"])
-    with t_over:
-        overview(conn, synced)
-    with t_items:
-        items_page(synced)
-    with t_unsold:
-        unsold_page(conn)
-    with t_orders:
-        orders_page(conn)
+    body(conn, synced_at or "")
+
+
+def page_overview() -> None:
+    _frame("📈 Overview", lambda conn, synced: overview(conn, synced))
+
+
+def page_items() -> None:
+    _frame("🏆 Sold items", lambda conn, synced: items_page(synced))
+
+
+def page_unsold() -> None:
+    _frame("⏳ Unsold listings", lambda conn, synced: unsold_page(conn))
+
+
+def page_orders() -> None:
+    _frame("🧾 Buy orders & delivery", lambda conn, synced: orders_page(conn))

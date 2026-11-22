@@ -2,7 +2,8 @@
 
 Run:  uv run --extra ui streamlit run app.py     (or: uv run gw2craft ui)
 
-Tabs: Account (TP performance dashboard), Find, Missing recipes, Item details, Legendaries.
+Pages (sidebar): Account - Overview, Sold items, Unsold, Orders; Crafting - Find, Missing
+recipes, Item details; Legendaries.
 Uses the same code as the CLI, so numbers match `gw2craft find / hints / show / legendary / track`.
 Money columns are in gold (1 gold = 100 silver = 10,000 copper) so they sort properly.
 """
@@ -152,15 +153,6 @@ with st.sidebar:
                "Fast = buy and sell instantly.  \nProfit is per craft, after the 15% TP tax.")
 
 prices_at = sync_mod.get_meta(conn, "prices_synced_at") or ""
-tab_acct, tab_find, tab_hints, tab_item, tab_leg = st.tabs(
-    ["📈 Account", "Find", "Missing recipes", "Item details", "Legendaries"])
-
-
-# ---------- Account dashboard ----------
-
-with tab_acct:
-    from gw2craft import ui_account
-    ui_account.render(has_key=bool(os.environ.get("GW2_API_KEY")))
 
 
 # ---------- Find ----------
@@ -176,7 +168,8 @@ def money_input(label: str, default: str, key: str) -> int | None:
         return None
 
 
-with tab_find:
+def page_find() -> None:
+    st.title("🔎 Find profitable recipes")
     c1, c2, c3, c4 = st.columns(4)
     mode = c1.radio("Mode", ["patient", "fast"], horizontal=True)
     view = c1.radio("Recipes", ["All (shows what's missing)", "Only mine"], horizontal=True,
@@ -213,7 +206,8 @@ with tab_find:
 
 # ---------- Missing recipes (hints) ----------
 
-with tab_hints:
+def page_hints() -> None:
+    st.title("💡 Missing recipes")
     if acct is None:
         st.info("Add your API key (GW2_API_KEY in .env) to see which recipes you're missing.")
     else:
@@ -245,7 +239,8 @@ with tab_hints:
 
 # ---------- Item details (show) ----------
 
-with tab_item:
+def page_item() -> None:
+    st.title("🧩 Item details")
     q = st.text_input("Item name or ID", placeholder="e.g. Deldrimor Steel Ingot")
     if q:
         conn = db()
@@ -342,7 +337,8 @@ with tab_item:
 
 # ---------- Legendaries ----------
 
-with tab_leg:
+def page_legendaries() -> None:
+    st.title("👑 Legendaries")
     conn = db()
     types, rarity = item_info(conn)
     solvers = {m: build_solver(conn, m, with_mystic_forge=True) for m in Mode}
@@ -413,3 +409,25 @@ with tab_leg:
         st.info(f"Fees on the sale: about {fmt(round(sell * 0.15))}. The 5% listing fee (~{fmt(round(sell * 0.05))}) "
                 "is paid again every time you cancel and relist. Few buyers: a listing can wait days.")
 
+
+# ---------- navigation (sidebar) ----------
+
+from gw2craft import ui_account  # noqa: E402
+
+nav = st.navigation({
+    "Account": [
+        st.Page(ui_account.page_overview, title="Overview", icon="📈", url_path="overview", default=True),
+        st.Page(ui_account.page_items, title="Sold items", icon="🏆", url_path="sold-items"),
+        st.Page(ui_account.page_unsold, title="Unsold listings", icon="⏳", url_path="unsold"),
+        st.Page(ui_account.page_orders, title="Buy orders & delivery", icon="🧾", url_path="orders"),
+    ],
+    "Crafting": [
+        st.Page(page_find, title="Find recipes", icon="🔎", url_path="find"),
+        st.Page(page_hints, title="Missing recipes", icon="💡", url_path="missing-recipes"),
+        st.Page(page_item, title="Item details", icon="🧩", url_path="item"),
+    ],
+    "Legendaries": [
+        st.Page(page_legendaries, title="Legendaries", icon="👑", url_path="legendaries"),
+    ],
+}, position="sidebar")
+nav.run()
