@@ -45,15 +45,26 @@ gw2craft track sync       # pull TP history, open orders, delivery box, wallet; 
 gw2craft track summary    # account value, cash flow 7/30/90 days, open listings, buy orders
 gw2craft track items --period 30   # per item: what performed well / badly, loot sales
 gw2craft track craft "<item>" 10 [--cost 1g20s]   # log a craft run with its real cost
+gw2craft track gathered add "Iron Ingot"          # items you gather yourself (list / add / remove)
 ```
 
 **Per-item profit:** each unit sold gets its cost from, in order:
 1. **exact**: an earlier TP buy of the same item, matched first-bought = first-sold (FIFO).
-2. **logged**: a craft run you logged with `track craft`.
-3. **estimated**: you can craft it, so its craft cost (patient prices, saved at each
-   sync) is used. The tool can't know if you really crafted it.
-4. **loot**: none of the above (drops, gathering, bought before your history).
-   Revenue only. Loot is shown separately so it doesn't look like trading profit.
+2. **logged**: a craft run you logged (`track craft`, or the **Log a craft run** form on
+   the Item details page).
+3. **gathered**: you marked the item as "I gather these" (`track gathered`, or the
+   🌿 box on the Sold items page; saved in `data/gathered.json`). Revenue only.
+4. **estimated**: you can craft it, so its craft cost (patient prices, saved at each
+   sync) is used. The tool can't know if you really crafted it — mark it gathered or
+   log your runs to fix false "losses".
+5. **loot**: none of the above (drops, bought before your history). Revenue only.
+
+Loot and gathered sales are shown apart, so they don't look like trading profit.
+
+**Daily automatic sync:** `scripts/daily_sync.sh` runs `track sync` and appends to
+`data/sync.log`. Cron runs it every day at 08:17 and 2 minutes after WSL starts
+(WSL only runs cron while it's open, so the start-up run catches up missed days).
+See the entries with `crontab -l`; remove them with `crontab -e`.
 
 Needs key permissions `account`, `tradingpost`, `wallet` (`inventories` + `characters`
 to value your stock).

@@ -5,3 +5,4 @@ __pycache__/
 data/gw2.sqlite*
 *.csv
 out.json
+data/sync.log

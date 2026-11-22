@@ -20,7 +20,8 @@ import streamlit as st
 from . import sync as sync_mod
 from .api import GW2Api
 from .hints import wiki_url
-from .performance import cash_flow, daily_cash_flow, item_results, open_listings, open_orders
+from .performance import (cash_flow, daily_cash_flow, item_results, load_gathered, open_listings,
+                          open_orders, save_gathered)
 from .pricing import fmt
 from .tracking import account_value, ensure_schema, snapshots, sync_account
 
@@ -69,10 +70,11 @@ def load_items(days: int | None, _synced: str) -> list[dict]:
              "Cost": g(r.cost), "Profit": g(r.trade_profit),
              "ROI %": round(r.trade_profit / r.cost * 100, 1) if r.cost else None,
              "Avg days to sell": round(r.avg_days_to_sell, 1) if r.avg_days_to_sell is not None else None,
-             "Basis": r.label.replace(" + loot", "").replace("loot + ", ""),
+             "Basis": r.cost_label,
              "Held": r.held or None, "Wiki": wiki_url(r.name),
-             "_loot_units": r.basis["loot"], "_loot_rev": g(r.loot_revenue), "_known": r.known_units,
-             "_total": g(r.profit)}
+             "_loot_units": r.revenue_only_units, "_gathered": r.basis["gathered"] > 0,
+             "_estimated": r.basis["estimated"] > 0, "_loot_rev": g(r.loot_revenue),
+             "_known": r.known_units, "_total": g(r.profit), "_id": r.item_id}
             for r in rows]
 
 
@@ -228,12 +230,37 @@ def items_page(synced: str) -> None:
         st.info("No sales with a known cost in this period.")
 
     if loot:
-        with st.expander(f"Loot sales ({len(loot)} items, revenue only)"):
+        with st.expander(f"Loot & gathered sales ({len(loot)} items, revenue only)"):
             st.dataframe(pd.DataFrame([{"Item": r["Item"], "Sold": r["_loot_units"], "Revenue": r["_loot_rev"],
+                                        "Gathered": "✓" if r["_gathered"] else "",
                                         "Avg days to sell": r["Avg days to sell"], "Wiki": r["Wiki"]}
                                        for r in loot]),
                          hide_index=True, column_config={"Revenue": GOLD,
                                                          "Wiki": st.column_config.LinkColumn(display_text="wiki")})
+
+    gathered_box(rows)
+
+
+def gathered_box(rows: list[dict]) -> None:
+    """Mark items you gather yourself, so they stop showing as estimated crafts (often false losses)."""
+    current = load_gathered()
+    names = {r["_id"]: r["Item"] for r in rows} | current
+    est = [r["_id"] for r in rows if r["_estimated"] and r["_id"] not in current]
+    with st.expander("🌿 I gather some of these myself", expanded=False):
+        st.caption("An item you can craft gets an *estimated* craft cost, as if you bought its parts. If you "
+                   "really gathered it (ore, wood, plants, salvage), mark it here: its sales then count as "
+                   "revenue only, like loot. Saved in data/gathered.json.")
+        if est:
+            st.caption("Items with an estimated cost right now: " + ", ".join(names[i] for i in est[:15])
+                       + (" …" if len(est) > 15 else ""))
+        picked = st.multiselect("Items I gather", options=sorted(names, key=lambda i: names[i]),
+                                default=sorted(current, key=lambda i: names.get(i, "")),
+                                format_func=lambda i: names.get(i, str(i)), key="gathered_pick")
+        if st.button("Save gathered items", key="gathered_save"):
+            save_gathered({i: names[i] for i in picked})
+            st.cache_data.clear()
+            st.toast(f"Saved {len(picked)} gathered items.", icon="🌿")
+            st.rerun()
 
 
 def unsold_page(conn) -> None:

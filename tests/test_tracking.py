@@ -60,3 +60,16 @@ def test_listing_value_and_account_value():
     snap = {"wallet": 1, "delivery_coins": 2, "listings_value": 3, "buy_orders": 4, "stock_value": None}
     assert account_value(snap) == 10
     assert account_value({**snap, "stock_value": 5}) == 15
+
+
+def test_log_and_delete_craft_run():
+    import pytest
+    from gw2craft.tracking import craft_runs, delete_craft_run, log_craft_run
+    db = make_db()
+    log_craft_run(db, 10, 5, 1234, "test", when=1000)
+    (run,) = craft_runs(db)
+    assert (run["item_id"], run["name"], run["qty"], run["cost_each"], run["note"]) == (10, "Thing", 5, 1234, "test")
+    delete_craft_run(db, run["id"])
+    assert craft_runs(db) == []
+    with pytest.raises(ValueError):
+        log_craft_run(db, 10, 0, 100)

@@ -1,0 +1,3 @@
+{
+  "_comment": "Items you gather yourself (ore, wood, plants...). Their sales count as revenue only, instead of being costed as crafts. Key = item ID."
+}

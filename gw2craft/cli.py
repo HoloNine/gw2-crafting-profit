@@ -660,17 +660,17 @@ def track_items(
         raise typer.Exit(0)
     label = f"last {period} days" if period else "all local history"
     traded = sorted([r for r in rows if r.known_units], key=lambda r: r.trade_profit, reverse=True)
-    loot = sorted([r for r in rows if r.basis["loot"]], key=lambda r: r.loot_revenue, reverse=True)
+    loot = sorted([r for r in rows if r.revenue_only_units], key=lambda r: r.loot_revenue, reverse=True)
     trade_profit = sum(r.trade_profit for r in traded)
     loot_rev = sum(r.loot_revenue for r in loot)
     console.print(f"[bold]{len(rows)} items sold ({label}).[/]")
     console.print(f"  Profit on items with a known cost: [bold]{fmt(round(trade_profit))}[/]  "
                   f"({len(traded)} items)")
-    console.print(f"  Loot sales (no known cost, revenue only): [bold]{fmt(round(loot_rev))}[/]  ({len(loot)} items)")
-    counts = {b: sum(r.basis[b] for r in rows) for b in ("exact", "logged", "estimated", "loot")}
+    console.print(f"  Loot & gathered sales (no cost, revenue only): [bold]{fmt(round(loot_rev))}[/]  ({len(loot)} items)")
+    counts = {b: sum(r.basis[b] for r in rows) for b in ("exact", "logged", "gathered", "estimated", "loot")}
     console.print(f"[dim]Units sold by cost basis: exact (matched to your TP buys) {counts['exact']}, "
                   f"logged crafts {counts['logged']}, estimated craft cost {counts['estimated']}, "
-                  f"loot {counts['loot']}.[/]")
+                  f"gathered {counts['gathered']}, loot {counts['loot']}.[/]")
 
     def table(title: str, part):
         t = Table(title=title, title_justify="left", header_style="bold")
@@ -683,7 +683,7 @@ def track_items(
                       f"[{colour}]{fmt(round(r.trade_profit))}[/]",
                       roi_text(r.trade_profit / r.cost) if r.cost else "-",
                       f"{r.avg_days_to_sell:.1f}" if r.avg_days_to_sell is not None else "-",
-                      r.label.replace(" + loot", ""), str(r.held) if r.held else "")
+                      r.cost_label, str(r.held) if r.held else "")
         console.print(t)
 
     if traded:
@@ -697,7 +697,8 @@ def track_items(
         for col in ("Item", "Sold", "Revenue (net)", "Avg days to sell"):
             t.add_column(col, justify="left" if col == "Item" else "right")
         for r in loot[:top]:
-            t.add_row(r.name, str(r.basis["loot"]), fmt(round(r.loot_revenue)),
+            t.add_row(r.name + (" (gathered)" if r.basis["gathered"] else ""), str(r.revenue_only_units),
+                      fmt(round(r.loot_revenue)),
                       f"{r.avg_days_to_sell:.1f}" if r.avg_days_to_sell is not None else "-")
         console.print(t)
     console.print("[dim]exact = matched to your TP buys (FIFO). estimated = craft cost saved at sync time "
@@ -713,8 +714,7 @@ def track_craft(
     note: str = typer.Option("", help="Optional note."),
 ) -> None:
     """Log a craft run, so its sales use your real cost instead of an estimate."""
-    import time as _time
-    from .tracking import craft_cost_now, ensure_schema
+    from .tracking import craft_cost_now, ensure_schema, log_craft_run
 
     db = sync_mod.connect()
     ensure_schema(db)
@@ -726,12 +726,39 @@ def track_craft(
         if each is None:
             console.print("[red]Can't work out a craft cost for this item. Give one with --cost.[/]")
             raise typer.Exit(1)
-    db.execute("INSERT INTO craft_runs (time, item_id, quantity, cost_each, note) VALUES (?,?,?,?,?)",
-               (int(_time.time()), item_id, qty, each, note))
-    db.commit()
+    log_craft_run(db, item_id, qty, each, note)
     name = db.execute("SELECT name FROM items WHERE id=?", (item_id,)).fetchone()[0]
     console.print(f"[green]Logged:[/] {qty} × {name} at {fmt(each)} each "
                   f"({'your cost' if cost else 'today' + chr(39) + 's patient craft cost'}).")
+
+
+@track_app.command("gathered")
+def track_gathered(
+    action: str = typer.Argument("list", help="list, add or remove"),
+    item: str | None = typer.Argument(None, help="Item name or ID (for add / remove)."),
+) -> None:
+    """Items you gather yourself: their sales count as revenue only, not as estimated crafts."""
+    from .performance import load_gathered, save_gathered
+
+    items = load_gathered()
+    if action == "list":
+        if not items:
+            console.print("No gathered items yet. Add one: gw2craft track gathered add \"Iron Ingot\"")
+        for iid, name in sorted(items.items(), key=lambda kv: kv[1]):
+            console.print(f"  {iid:>7}  {name}")
+        return
+    if action not in ("add", "remove") or not item:
+        raise typer.BadParameter("use: list | add <item> | remove <item>")
+    db = sync_mod.connect()
+    item_id = _find_item(db, item)
+    name = db.execute("SELECT name FROM items WHERE id=?", (item_id,)).fetchone()[0]
+    if action == "add":
+        items[item_id] = name
+    else:
+        items.pop(item_id, None)
+    save_gathered(items)
+    console.print(f"[green]{'Added' if action == 'add' else 'Removed'}:[/] {name}. "
+                  f"{len(items)} gathered items in data/gathered.json.")
 
 
 @app.callback()

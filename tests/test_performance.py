@@ -75,7 +75,7 @@ def test_logged_craft_run_beats_estimate_and_mixes_with_buys():
     r = by_id(item_results(db, now=NOW, estimate=lambda i, t: 700))[LOGGED]
     # 1 matched to the buy (5s), 1 to the logged craft (3s), the 3rd estimated (7s).
     assert r.cost == 500 + 300 + 700
-    assert r.basis == {"exact": 1, "logged": 1, "estimated": 1, "loot": 0}
+    assert r.basis == {"exact": 1, "logged": 1, "gathered": 0, "estimated": 1, "loot": 0}
     assert r.label == "exact + logged + estimated"
 
 
@@ -106,3 +106,19 @@ def test_loot_share_is_split_from_trade_profit():
     assert r.known_units == 1 and r.basis["loot"] == 1
     assert r.loot_revenue == pytest.approx(net(1000, 2) / 2)
     assert r.trade_profit == pytest.approx(net(1000, 2) / 2 - 100)
+
+
+def test_gathered_items_are_revenue_only_not_estimated():
+    db = db_with([("sell", CRAFTED, 1000, 2, ts(1), ts(2))])
+    est = lambda i, t: 600  # noqa: E731 - would make it a 'loss' if it were costed
+    r = by_id(item_results(db, now=NOW, estimate=est, gathered={CRAFTED}))[CRAFTED]
+    assert r.cost == 0 and r.basis["gathered"] == 2 and r.basis["estimated"] == 0
+    assert r.revenue_only_units == 2 and r.known_units == 0
+    assert r.trade_profit == pytest.approx(0) and r.cost_label == "-"
+
+
+def test_gathered_does_not_override_real_buys():
+    db = db_with([("buy", FLIP, 100, 1, ts(1), ts(1, 1)), ("sell", FLIP, 300, 2, ts(2), ts(3))])
+    r = by_id(item_results(db, now=NOW, estimate=lambda i, t: None, gathered={FLIP}))[FLIP]
+    assert r.basis == {"exact": 1, "logged": 0, "gathered": 1, "estimated": 0, "loot": 0}
+    assert r.cost_label == "exact"

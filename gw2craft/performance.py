@@ -8,9 +8,11 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from .pricing import fmt, listing_fee, net
 from .tracking import ensure_schema
@@ -163,11 +165,30 @@ def open_orders(db: sqlite3.Connection, now: datetime | None = None) -> list[Ope
 # How each unit sold gets its cost, in this order:
 #   1. "exact"     - matched to an earlier TP buy of the same item, first bought = first sold (FIFO).
 #   2. "logged"    - matched to a craft run you logged (gw2craft track craft), with its real cost.
-#   3. "estimated" - no buy or logged craft, but you can craft it: cost = solver craft cost
+#   3. "gathered"  - you marked this item as "I gather these" (data/gathered.json): no cost,
+#                    revenue only. Checked before "estimated" so gathered ore isn't costed.
+#   4. "estimated" - no buy or logged craft, but you can craft it: cost = solver craft cost
 #                    (patient prices) saved at the sync nearest the sale.
-#   4. "loot"      - none of the above (drops, gathering, bought before your history): revenue only.
+#   5. "loot"      - none of the above (drops, bought before your history): revenue only.
 
-BASES = ("exact", "logged", "estimated", "loot")
+BASES = ("exact", "logged", "gathered", "estimated", "loot")
+REVENUE_ONLY = ("gathered", "loot")  # units with no cost: shown apart from trading profit
+GATHERED_PATH = Path(__file__).resolve().parent.parent / "data" / "gathered.json"
+
+
+def load_gathered(path: Path = GATHERED_PATH) -> dict[int, str]:
+    """{item_id: name} of items you gather yourself."""
+    if not path.exists():
+        return {}
+    raw = json.loads(path.read_text() or "{}")
+    return {int(k): v for k, v in raw.items() if not k.startswith("_")}
+
+
+def save_gathered(items: dict[int, str], path: Path = GATHERED_PATH) -> None:
+    data = {"_comment": "Items you gather yourself (ore, wood, plants...). Their sales count as "
+                        "revenue only, instead of being costed as crafts. Key = item ID."}
+    data.update({str(k): v for k, v in sorted(items.items(), key=lambda kv: kv[1])})
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 
 @dataclass
@@ -199,18 +220,29 @@ class ItemResult:
         return self.days_to_sell_sum / self.sells if self.sells else None
 
     @property
+    def revenue_only_units(self) -> int:
+        """Units sold with no cost: loot + gathered."""
+        return sum(self.basis[b] for b in REVENUE_ONLY)
+
+    @property
     def loot_revenue(self) -> float:
-        """Revenue from units with no known cost (share of revenue, by units)."""
-        return self.revenue * self.basis["loot"] / self.sold if self.sold else 0.0
+        """Revenue from units with no cost (loot + gathered; share of revenue, by units)."""
+        return self.revenue * self.revenue_only_units / self.sold if self.sold else 0.0
 
     @property
     def known_units(self) -> int:
-        return self.sold - self.basis["loot"]
+        return self.sold - self.revenue_only_units
 
     @property
     def trade_profit(self) -> float:
         """Profit on units with a known cost only (exact + logged + estimated)."""
         return self.profit - self.loot_revenue
+
+    @property
+    def cost_label(self) -> str:
+        """Only the bases that carry a cost: 'exact', 'exact + estimated', ..."""
+        used = [b for b in BASES if self.basis[b] and b not in REVENUE_ONLY]
+        return " + ".join(used) if used else "-"
 
     @property
     def label(self) -> str:
@@ -236,7 +268,7 @@ def craft_estimate_lookup(db: sqlite3.Connection):
 
 
 def item_results(db: sqlite3.Connection, days: int | None = None, now: datetime | None = None,
-                 estimate=None) -> list[ItemResult]:
+                 estimate=None, gathered: set[int] | None = None) -> list[ItemResult]:
     """Per-item results for sells in the last `days` days (None = all local history).
 
     FIFO runs over the whole history, so a sale in the period can match an older buy.
@@ -245,6 +277,7 @@ def item_results(db: sqlite3.Connection, days: int | None = None, now: datetime 
     now = now or now_utc()
     since = (now - timedelta(days=days)).timestamp() if days else None
     estimate = estimate or craft_estimate_lookup(db)
+    gathered = set(load_gathered()) if gathered is None else gathered
 
     events: dict[int, list[tuple]] = {}
     for kind, item_id, price, qty, created, purchased in db.execute(
@@ -276,8 +309,10 @@ def item_results(db: sqlite3.Connection, days: int | None = None, now: datetime 
                 if lots[0][0] == 0:
                     lots.pop(0)
             if left and in_period:
-                est = estimate(item_id, int(t))
-                if est is not None:
+                est = None if item_id in gathered else estimate(item_id, int(t))
+                if item_id in gathered:
+                    res.basis["gathered"] += left
+                elif est is not None:
                     res.cost += left * est
                     res.basis["estimated"] += left
                 else:

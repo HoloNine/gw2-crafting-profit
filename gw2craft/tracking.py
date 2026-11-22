@@ -229,6 +229,31 @@ def save_craft_estimates(db: sqlite3.Connection, acct, item_ids: set[int], now: 
     return len(rows)
 
 
+def log_craft_run(db: sqlite3.Connection, item_id: int, qty: int, cost_each: int, note: str = "",
+                  when: int | None = None) -> None:
+    """Save a craft run you did, so its sales use this real cost (basis "logged")."""
+    if qty <= 0 or cost_each < 0:
+        raise ValueError("Quantity must be above 0 and cost can't be negative.")
+    ensure_schema(db)
+    db.execute("INSERT INTO craft_runs (time, item_id, quantity, cost_each, note) VALUES (?,?,?,?,?)",
+               (when or int(time.time()), item_id, qty, cost_each, note))
+    db.commit()
+
+
+def craft_runs(db: sqlite3.Connection, limit: int = 20) -> list[dict]:
+    ensure_schema(db)
+    rows = db.execute("""SELECT c.id, c.time, c.item_id, COALESCE(i.name, 'item ' || c.item_id), c.quantity,
+                                c.cost_each, c.note
+                         FROM craft_runs c LEFT JOIN items i ON i.id = c.item_id
+                         ORDER BY c.time DESC LIMIT ?""", (limit,)).fetchall()
+    return [dict(zip(("id", "time", "item_id", "name", "qty", "cost_each", "note"), r)) for r in rows]
+
+
+def delete_craft_run(db: sqlite3.Connection, run_id: int) -> None:
+    db.execute("DELETE FROM craft_runs WHERE id = ?", (run_id,))
+    db.commit()
+
+
 def account_value(snap: dict) -> int:
     """Wallet + delivery box + open listings (after fee) + coins in buy orders (+ stock)."""
     return (snap["wallet"] + snap["delivery_coins"] + snap["listings_value"] + snap["buy_orders"]

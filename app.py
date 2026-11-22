@@ -239,6 +239,46 @@ def page_hints() -> None:
 
 # ---------- Item details (show) ----------
 
+def log_craft_box(conn, item_id: int, name: str, amount: int, unit_cost: float, mode: Mode) -> None:
+    """Log a craft run you did, so its sales use your real cost instead of an estimate."""
+    from gw2craft.tracking import craft_runs, delete_craft_run, log_craft_run
+
+    st.divider()
+    st.markdown(f"**📝 Log a craft run of {name}**")
+    st.caption("Did you craft this? Log it, and the Sold items page uses this real cost for the next "
+               "ones you sell (first made = first sold), instead of an estimate. The cost is pre-filled "
+               f"with today's {mode.value} craft cost — change it to what you really paid.")
+    with st.form(f"log_craft_{item_id}", clear_on_submit=False):
+        c1, c2, c3 = st.columns([1, 1, 2])
+        n_made = c1.number_input("Items made", min_value=1, value=int(amount), step=1)
+        cost_txt = c2.text_input("Real cost per item", value=fmt(round(unit_cost)),
+                                 help="e.g. 1g 20s 5c, 45s or plain copper")
+        note = c3.text_input("Note (optional)", placeholder="e.g. used my own ore")
+        if st.form_submit_button("Log craft run", type="primary"):
+            try:
+                each = parse_money(cost_txt)
+                log_craft_run(conn, item_id, int(n_made), each, note)
+            except ValueError as e:
+                st.error(str(e))
+            else:
+                st.cache_data.clear()
+                st.success(f"Logged {int(n_made)} × {name} at {fmt(each)} each.")
+    runs = [r for r in craft_runs(conn, limit=200) if r["item_id"] == item_id][:10]
+    if runs:
+        st.caption("Your logged runs for this item:")
+        st.dataframe(pd.DataFrame([{"When": pd.to_datetime(r["time"], unit="s", utc=True).strftime("%Y-%m-%d %H:%M"),
+                                    "Qty": r["qty"], "Cost each": g(r["cost_each"]), "Note": r["note"]}
+                                   for r in runs]), hide_index=True, column_config={"Cost each": GOLD})
+        drop = st.selectbox("Delete a run logged by mistake", [None, *[r["id"] for r in runs]],
+                            format_func=lambda i: "—" if i is None else next(
+                                f"{r['qty']} × at {fmt(r['cost_each'])} ({pd.to_datetime(r['time'], unit='s', utc=True):%Y-%m-%d})"
+                                for r in runs if r["id"] == i), key=f"drop_run_{item_id}")
+        if drop is not None and st.button("Delete this run", key=f"drop_btn_{item_id}"):
+            delete_craft_run(conn, drop)
+            st.cache_data.clear()
+            st.rerun()
+
+
 def page_item() -> None:
     st.title("🧩 Item details")
     q = st.text_input("Item name or ID", placeholder="e.g. Deldrimor Steel Ingot")
@@ -333,6 +373,7 @@ def page_item() -> None:
                                 st.markdown(f"- **{n}**: {' | '.join(bits)} — [wiki]({wiki_url(n)})")
                         else:
                             st.success("✅ You can craft everything in this tree.")
+                    log_craft_box(conn, item_id, names.get(item_id, str(item_id)), amount, node.unit_cost, i_mode)
 
 
 # ---------- Legendaries ----------
