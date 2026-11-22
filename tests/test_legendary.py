@@ -53,3 +53,14 @@ def test_parse_listings():
                                    {"listings": 1, "unit_price": 90, "quantity": 2}],
                          "buys": [{"listings": 5, "unit_price": 80, "quantity": 9}]})
     assert (li.sell_listings, li.sell_qty, li.at_lowest, li.buy_orders) == (4, 5, 2, 5)
+
+
+def test_locked_recipes_skip_parts_you_already_own():
+    from gw2craft.account import Status
+    # The gift is made from a mat whose recipe is locked; owning the gift means you don't need it.
+    sub = Recipe(20, MAT, 1, ("Huntsman",), 400, (Ingredient(PRE_PART, 1),), flags=("LearnedFromItem",))
+    s = Solver([*API, sub], ITEMS, {**QUOTES, PRE_PART: Quote(1, 2)}, Mode.PATIENT, mystic_forge=MF)
+    status = lambda r: Status("sheet")  # noqa: E731 - nothing is learned
+    # Recipe 9 (the precursor) is crafted too here, since its part now costs 2c.
+    assert {r.id for r, _ in build_report(s, MF[0], TYPES, status).locked} == {9, 20}
+    assert {r.id for r, _ in build_report(s, MF[0], TYPES, status, owned={GIFT: 1}).locked} == {9}

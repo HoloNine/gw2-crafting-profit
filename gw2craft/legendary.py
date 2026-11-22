@@ -16,7 +16,6 @@ from dataclasses import dataclass, field
 
 from .account import Status
 from .pricing import Mode, buy_cost, net, sell_price
-from .profit import path_recipes
 from .solver import BOUND_FLAGS, Node, Recipe, Solver
 
 # Item types that have Legendary rarity but are materials/trophies, not legendary gear.
@@ -158,6 +157,7 @@ def build_report(solver: Solver, recipe: Recipe, types: dict[int, str],
     leaves: dict[tuple[str, int], float] = {}
     units: dict[tuple[str, int], float] = {}
     left = dict(owned)
+    crafted: dict[int, Recipe] = {}  # recipes you'd still have to craft (not covered by owned parts)
 
     def walk(n: Node, amount: float) -> None:
         if n.source == "craft" and n.recipe is not None and n is not node:
@@ -170,6 +170,8 @@ def build_report(solver: Solver, recipe: Recipe, types: dict[int, str],
                 if amount <= 0:
                     return
         if n.source == "craft" and n.recipe is not None:
+            if n is not node:
+                crafted.setdefault(n.recipe.id, n.recipe)
             crafts = amount / n.recipe.output_count
             for child, count in n.children:
                 walk(child, crafts * count)
@@ -186,7 +188,7 @@ def build_report(solver: Solver, recipe: Recipe, types: dict[int, str],
 
     locked = []
     if status_of:
-        locked = [(r, s) for r in path_recipes(node)
+        locked = [(r, s) for r in crafted.values()
                   if not r.mystic_forge and not (s := status_of(r)).ready]
     return LegendaryReport(
         recipe.output_item_id, item.name, solver.mode, recipe, node, pre_id, pre_buy, pre_craft,

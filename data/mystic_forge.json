@@ -1,29 +1,29 @@
 {
   "_comment": "Hand-kept Mystic Forge recipes, from the official GW2 Wiki (raw page source, checked 2026-11-08). Key = output item ID. Add 'random': true for random outputs, plus 'avg_count' only if confirmed. 'name' is for humans only.",
 
-  "30704": {
-    "name": "Twilight",
+  "30694": {
+    "name": "The Predator",
     "generation": 1,
     "output_count": 1,
     "ingredients": [
-      { "id": 29185, "count": 1, "name": "Dusk" },
-      { "id": 19648, "count": 1, "name": "Gift of Twilight" },
-      { "id": 19674, "count": 1, "name": "Gift of Mastery" },
-      { "id": 19626, "count": 1, "name": "Gift of Fortune" }
+      { "id": 29175, "count": 1, "name": "The Hunter" },
+      { "id": 19661, "count": 1, "name": "Gift of The Predator" },
+      { "id": 19626, "count": 1, "name": "Gift of Fortune" },
+      { "id": 19674, "count": 1, "name": "Gift of Mastery" }
     ],
-    "source": "https://wiki.guildwars2.com/wiki/Twilight"
+    "source": "https://wiki.guildwars2.com/wiki/The_Predator"
   },
 
-  "19648": {
-    "name": "Gift of Twilight",
+  "19661": {
+    "name": "Gift of The Predator",
     "output_count": 1,
     "ingredients": [
-      { "id": 19621, "count": 1, "name": "Gift of Metal" },
-      { "id": 19631, "count": 1, "name": "Gift of Darkness" },
+      { "id": 19622, "count": 1, "name": "Gift of Wood" },
+      { "id": 19636, "count": 1, "name": "Gift of Stealth" },
       { "id": 19676, "count": 100, "name": "Icy Runestone" },
-      { "id": 24570, "count": 1, "name": "Superior Sigil of Blood" }
+      { "id": 24615, "count": 1, "name": "Superior Sigil of Force" }
     ],
-    "source": "https://wiki.guildwars2.com/wiki/Gift_of_Twilight"
+    "source": "https://wiki.guildwars2.com/wiki/Gift_of_The_Predator"
   },
 
   "19674": {

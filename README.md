@@ -142,7 +142,7 @@ The tool tells you **what** is missing. It does not plan levelling: use
 |---|---|---|
 | `vendor_prices.json` | NPC prices (copper) | empty, needs in-game checks |
 | `timegated.json` | once-a-day crafts | 6 ascended materials |
-| `mystic_forge.json` | Mystic Forge recipes for legendaries | Twilight (6 recipes), from the wiki's raw page source; more Gen 1 one at a time |
+| `mystic_forge.json` | Mystic Forge recipes for legendaries | The Predator (6 recipes), from the wiki's raw page source; more Gen 1 one at a time |
 | `own_materials.json` | your value for account-bound parts | empty |
 | `recipe_sheets.json` | NPC recipe sheet prices (optional, shown in hints if filled) | empty |
 
